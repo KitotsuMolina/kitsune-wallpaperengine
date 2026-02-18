@@ -738,13 +738,57 @@ fn resolve_uniform_values(
 }
 
 fn merge_pass_overrides(base_pass: &Value, override_pass: Option<&Value>) -> Value {
-    let mut out = base_pass.as_object().cloned().unwrap_or_default();
-    if let Some(ov) = override_pass.and_then(|v| v.as_object()) {
-        for (k, v) in ov {
-            out.insert(k.clone(), v.clone());
+    fn deep_merge(base: &Value, ov: &Value) -> Value {
+        match (base, ov) {
+            (Value::Object(b), Value::Object(o)) => {
+                let mut out = b.clone();
+                for (k, v_ov) in o {
+                    if let Some(v_base) = out.get(k) {
+                        out.insert(k.clone(), deep_merge(v_base, v_ov));
+                    } else {
+                        out.insert(k.clone(), v_ov.clone());
+                    }
+                }
+                Value::Object(out)
+            }
+            (_, Value::Null) => base.clone(),
+            (_, _) => ov.clone(),
         }
     }
-    Value::Object(out)
+
+    match override_pass {
+        Some(ov) => deep_merge(base_pass, ov),
+        None => base_pass.clone(),
+    }
+}
+
+fn effect_override_for_material_pass(
+    effect_overrides: &[Value],
+    effect_pass_idx: usize,
+    material_pass_idx: usize,
+    sequential_cursor: &mut usize,
+    material_pass_count: usize,
+) -> Option<Value> {
+    if *sequential_cursor + material_pass_count <= effect_overrides.len() {
+        let ov = effect_overrides
+            .get(*sequential_cursor + material_pass_idx)
+            .cloned();
+        if material_pass_idx + 1 == material_pass_count {
+            *sequential_cursor += material_pass_count;
+        }
+        return ov;
+    }
+
+    let fallback = effect_overrides.get(effect_pass_idx)?;
+    if let Some(local) = fallback
+        .get("passes")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.get(material_pass_idx))
+    {
+        return Some(local.clone());
+    }
+
+    (material_pass_idx == 0).then(|| fallback.clone())
 }
 
 pub fn build_scene_gpu_graph(root: &Path) -> Result<SceneGpuGraph> {
@@ -986,8 +1030,10 @@ pub fn build_scene_gpu_graph(root: &Path) -> Result<SceneGpuGraph> {
             );
 
             if let Some(object_effects) = object.get("effects").and_then(|v| v.as_array()) {
+                let mut sequential_override_cursor = 0usize;
                 for (effect_idx, effect) in object_effects.iter().enumerate() {
-                    if effect.get("visible").and_then(|v| v.as_bool()) == Some(false) {
+                    let effect_visible = parse_object_visible(effect.get("visible"), &user_values);
+                    if !effect_visible {
                         continue;
                     }
                     let Some(effect_file_ref) = effect.get("file").and_then(|v| v.as_str()) else {
@@ -1038,10 +1084,14 @@ pub fn build_scene_gpu_graph(root: &Path) -> Result<SceneGpuGraph> {
                             .iter()
                             .enumerate()
                             .map(|(mat_idx, base_pass)| {
-                                let ov = effect_overrides
-                                    .get(effect_pass_idx + mat_idx)
-                                    .or_else(|| effect_overrides.get(mat_idx));
-                                merge_pass_overrides(base_pass, ov)
+                                let ov = effect_override_for_material_pass(
+                                    &effect_overrides,
+                                    effect_pass_idx,
+                                    mat_idx,
+                                    &mut sequential_override_cursor,
+                                    effect_material_passes.len(),
+                                );
+                                merge_pass_overrides(base_pass, ov.as_ref())
                             })
                             .collect::<Vec<_>>();
 
@@ -1207,5 +1257,50 @@ mod tests {
             Some(&Value::String("effects/scroll".to_string()))
         );
         assert!(merged.get("constantshadervalues").is_some());
+    }
+
+    #[test]
+    fn merge_pass_overrides_is_deep_for_objects() {
+        let base = serde_json::json!({
+            "combos": { "A": 1, "B": 2 },
+            "constantshadervalues": { "x": 1, "y": 2 }
+        });
+        let ov = serde_json::json!({
+            "combos": { "B": 5, "C": 8 },
+            "constantshadervalues": { "y": 9 }
+        });
+        let merged = merge_pass_overrides(&base, Some(&ov));
+        assert_eq!(merged["combos"]["A"], Value::from(1));
+        assert_eq!(merged["combos"]["B"], Value::from(5));
+        assert_eq!(merged["combos"]["C"], Value::from(8));
+        assert_eq!(merged["constantshadervalues"]["x"], Value::from(1));
+        assert_eq!(merged["constantshadervalues"]["y"], Value::from(9));
+    }
+
+    #[test]
+    fn effect_override_mapping_supports_sequential_pass_overrides() {
+        let overrides = vec![
+            serde_json::json!({"constantshadervalues": {"p": 1}}),
+            serde_json::json!({"constantshadervalues": {"p": 2}}),
+            serde_json::json!({"constantshadervalues": {"p": 3}}),
+        ];
+        let mut cursor = 0usize;
+        let a0 = effect_override_for_material_pass(&overrides, 0, 0, &mut cursor, 2).expect("a0");
+        let a1 = effect_override_for_material_pass(&overrides, 0, 1, &mut cursor, 2).expect("a1");
+        let b0 = effect_override_for_material_pass(&overrides, 1, 0, &mut cursor, 1).expect("b0");
+        assert_eq!(a0["constantshadervalues"]["p"], Value::from(1));
+        assert_eq!(a1["constantshadervalues"]["p"], Value::from(2));
+        assert_eq!(b0["constantshadervalues"]["p"], Value::from(3));
+    }
+
+    #[test]
+    fn effect_visible_user_condition_is_evaluated() {
+        let mut users = BTreeMap::<String, Value>::new();
+        users.insert("style".to_string(), Value::String("1".to_string()));
+        let visible = serde_json::json!({
+            "user": {"name":"style","condition":"1"},
+            "value": false
+        });
+        assert!(parse_object_visible(Some(&visible), &users));
     }
 }
