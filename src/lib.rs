@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 
 pub mod audio;
+pub mod asset_resolver;
 pub mod cli;
 pub mod library_scan;
 pub mod playback;
@@ -8,9 +9,12 @@ pub mod scene_pkg;
 pub mod scene_plan;
 pub mod scene_renderer;
 pub mod scene_runtime;
+pub mod scene_script;
 pub mod scene_effect_proxy;
 pub mod scene_gpu_backend;
 pub mod scene_gpu_graph;
+pub mod scene_native_runtime;
+pub mod scene_native_renderer;
 pub mod scene_text;
 pub mod services;
 pub mod tex_payload;
@@ -28,6 +32,7 @@ use scene_pkg::{
 use scene_plan::build_scene_plan;
 use scene_gpu_backend::{SceneGpuPlayArgs, scene_gpu_play};
 use scene_gpu_graph::build_scene_gpu_graph;
+use scene_native_runtime::build_native_runtime_plan;
 use scene_renderer::build_scene_render_session;
 use scene_runtime::run_scene_runtime;
 use scene_effect_proxy::{build_scene_audio_bars_overlay, maybe_build_scene_animated_proxy};
@@ -198,6 +203,16 @@ pub fn run(cli: Cli) -> Result<()> {
             let root = resolve_wallpaper_path(&wallpaper, &downloads_root);
             let graph = build_scene_gpu_graph(&root)?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
+            Ok(())
+        }
+        Commands::SceneNativePlan {
+            wallpaper,
+            downloads_root,
+        } => {
+            let root = resolve_wallpaper_path(&wallpaper, &downloads_root);
+            let graph = build_scene_gpu_graph(&root)?;
+            let plan = build_native_runtime_plan(&graph);
+            println!("{}", serde_json::to_string_pretty(&plan)?);
             Ok(())
         }
         Commands::SceneGpuPlay {

@@ -103,6 +103,11 @@ pub enum Commands {
         #[arg(long, default_value_os_t = default_downloads_root())]
         downloads_root: PathBuf,
     },
+    SceneNativePlan {
+        wallpaper: String,
+        #[arg(long, default_value_os_t = default_downloads_root())]
+        downloads_root: PathBuf,
+    },
     SceneGpuPlay {
         wallpaper: String,
         #[arg(long)]

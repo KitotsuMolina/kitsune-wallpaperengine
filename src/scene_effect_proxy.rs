@@ -1,4 +1,6 @@
 use crate::scene_pkg::{extract_entry_to_cache, find_entry, parse_scene_pkg, read_entry_bytes};
+use crate::scene_gpu_graph::{SceneGpuGraph, build_scene_gpu_graph};
+use crate::scene_native_runtime::{NativeSupportTier, build_native_runtime_plan};
 use crate::tex_payload::extract_playable_proxy_from_tex;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -9,6 +11,8 @@ use std::process::Command;
 
 const EFFECT_LAYER_LIMIT: usize = 1;
 const EFFECT_LAYER_ALPHA: f32 = 0.35;
+const DEFAULT_CONTRAST: f32 = 1.01;
+const DEFAULT_SATURATION: f32 = 1.02;
 
 fn is_image_like(path: &Path) -> bool {
     let ext = path
@@ -40,12 +44,51 @@ enum MotionProfile {
 struct EffectLayerRef {
     texture_ref: String,
     profile: MotionProfile,
+    alpha: f32,
+    family: String,
+    center_x: f32,
+    center_y: f32,
+    width: f32,
+    height: f32,
+    angle_rad: f32,
 }
 
 #[derive(Debug, Clone)]
 struct EffectLayer {
     mask_image: PathBuf,
     profile: MotionProfile,
+    alpha: f32,
+    family: String,
+    center_x: f32,
+    center_y: f32,
+    width: f32,
+    height: f32,
+    angle_rad: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VisualTuning {
+    drift_amp_x: f32,
+    drift_amp_y: f32,
+    drift_freq_x: f32,
+    drift_freq_y: f32,
+    contrast: f32,
+    saturation: f32,
+    layer_alpha: f32,
+}
+
+impl Default for VisualTuning {
+    fn default() -> Self {
+        Self {
+            drift_amp_x: 3.0,
+            drift_amp_y: 2.0,
+            drift_freq_x: 1.7,
+            drift_freq_y: 1.4,
+            contrast: DEFAULT_CONTRAST,
+            saturation: DEFAULT_SATURATION,
+            layer_alpha: EFFECT_LAYER_ALPHA,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +131,65 @@ fn infer_motion_profile(effect_file: &str) -> MotionProfile {
     }
 }
 
+fn parse_f32_value(v: &Value) -> Option<f32> {
+    match v {
+        Value::Number(n) => n.as_f64().map(|x| x as f32),
+        Value::String(s) => s.parse::<f32>().ok(),
+        _ => None,
+    }
+}
+
+fn visual_tuning_from_graph(graph: &SceneGpuGraph) -> VisualTuning {
+    let mut tuning = VisualTuning::default();
+    let mut scroll_x = 0.0f32;
+    let mut scroll_y = 0.0f32;
+    let mut bright = 1.0f32;
+    let mut power = 1.0f32;
+    let mut alpha = 1.0f32;
+    let mut found_scroll = false;
+
+    for node in &graph.effect_nodes {
+        for pass in &node.passes {
+            if let Some(v) = pass.effective_uniforms.get("g_ScrollX").and_then(parse_f32_value) {
+                scroll_x += v.abs();
+                found_scroll = true;
+            }
+            if let Some(v) = pass.effective_uniforms.get("g_ScrollY").and_then(parse_f32_value) {
+                scroll_y += v.abs();
+                found_scroll = true;
+            }
+            if let Some(v) = pass
+                .effective_uniforms
+                .get("g_Brightness")
+                .and_then(parse_f32_value)
+            {
+                bright = (bright + v).max(0.01);
+            }
+            if let Some(v) = pass.effective_uniforms.get("g_Power").and_then(parse_f32_value) {
+                power = (power + v).max(0.01);
+            }
+            if let Some(v) = pass
+                .effective_uniforms
+                .get("g_UserAlpha")
+                .and_then(parse_f32_value)
+            {
+                alpha = alpha.min(v.clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    if found_scroll {
+        tuning.drift_amp_x = (2.0 + scroll_x * 6.0).clamp(1.0, 10.0);
+        tuning.drift_amp_y = (1.5 + scroll_y * 5.0).clamp(1.0, 8.0);
+        tuning.drift_freq_x = (1.2 + scroll_x * 1.8).clamp(0.6, 6.0);
+        tuning.drift_freq_y = (1.0 + scroll_y * 1.6).clamp(0.6, 5.5);
+    }
+    tuning.saturation = (1.0 + (bright - 1.0) * 0.14).clamp(0.70, 1.45);
+    tuning.contrast = (1.0 + (power - 1.0) * 0.08).clamp(0.85, 1.35);
+    tuning.layer_alpha = (alpha * 0.45).clamp(0.10, 0.65);
+    tuning
+}
+
 fn collect_effect_layer_refs(scene: &Value, max_candidates: usize) -> Vec<EffectLayerRef> {
     let mut out = Vec::new();
     let mut seen = HashSet::<String>::new();
@@ -122,6 +224,13 @@ fn collect_effect_layer_refs(scene: &Value, max_candidates: usize) -> Vec<Effect
                             out.push(EffectLayerRef {
                                 texture_ref: trimmed.to_string(),
                                 profile,
+                                alpha: EFFECT_LAYER_ALPHA,
+                                family: "legacy-effects".to_string(),
+                                center_x: 0.0,
+                                center_y: 0.0,
+                                width: 0.0,
+                                height: 0.0,
+                                angle_rad: 0.0,
                             });
                             if out.len() >= max_candidates.max(1) {
                                 return out;
@@ -135,37 +244,107 @@ fn collect_effect_layer_refs(scene: &Value, max_candidates: usize) -> Vec<Effect
     out
 }
 
+fn collect_effect_layer_refs_from_native_plan(
+    graph: &SceneGpuGraph,
+    max_candidates: usize,
+) -> Vec<EffectLayerRef> {
+    let plan = build_native_runtime_plan(graph);
+    let mut out = Vec::<EffectLayerRef>::new();
+    let mut seen = HashSet::<String>::new();
+
+    for layer in plan.draw_layers {
+        if !matches!(layer.tier, NativeSupportTier::Ready) {
+            continue;
+        }
+        let Some(texture_ref) = layer.primary_texture else {
+            continue;
+        };
+        let key = texture_ref.to_ascii_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+
+        let profile = infer_motion_profile(&format!(
+            "{} {}",
+            layer.shader_family, layer.shader
+        ));
+        out.push(EffectLayerRef {
+            texture_ref,
+            profile,
+            alpha: layer.alpha.clamp(0.05, 1.0),
+            family: layer.shader_family,
+            center_x: layer.center_x,
+            center_y: layer.center_y,
+            width: layer.width,
+            height: layer.height,
+            angle_rad: layer.angle_rad,
+        });
+        if out.len() >= max_candidates.max(1) {
+            break;
+        }
+    }
+
+    out
+}
+
 fn find_tex_entry_for_texture_ref(
     pkg: &crate::scene_pkg::ScenePkg,
     texture_ref: &str,
 ) -> Option<crate::scene_pkg::ScenePkgEntry> {
     let mut candidates = Vec::new();
-    let needle = texture_ref.to_ascii_lowercase();
+    let mut needle = texture_ref.to_ascii_lowercase();
+    if needle.ends_with(".tex") {
+        needle = needle.trim_end_matches(".tex").to_string();
+    }
+    let needle_path = Path::new(&needle);
+    let needle_base = needle_path
+        .file_stem()
+        .map(|v| v.to_string_lossy().to_string())
+        .unwrap_or_else(|| needle.clone());
+
     for e in &pkg.entries {
         let f = e.filename.to_ascii_lowercase();
         if !f.ends_with(".tex") {
             continue;
         }
-        if f.ends_with(&format!("{needle}.tex")) || f.contains(&format!("/{needle}.tex")) {
+        if f.ends_with(&format!("{needle}.tex"))
+            || f.contains(&format!("/{needle}.tex"))
+            || f.ends_with(&format!("{needle_base}.tex"))
+            || f.contains(&format!("/{needle_base}.tex"))
+        {
             candidates.push(e.clone());
         }
     }
     candidates.into_iter().next()
 }
 
-fn filter_for_profile(profile: MotionProfile, src: &str, out: &str) -> String {
+fn filter_for_profile(profile: MotionProfile, src: &str, out: &str, tuning: &VisualTuning) -> String {
     match profile {
         MotionProfile::Iris => format!(
-            "[{src}]crop=iw-10:ih-10:x='5+sin(t*2.9)*4':y='5+cos(t*2.5)*3',pad=iw+10:ih+10:5:5:color=black@0[{out}]"
+            "[{src}]crop=iw-10:ih-10:x='5+sin(t*2.9)*{:.3}':y='5+cos(t*2.5)*{:.3}',pad=iw+10:ih+10:5:5:color=black@0[{out}]",
+            (tuning.drift_amp_x * 1.15).clamp(2.0, 12.0),
+            (tuning.drift_amp_y * 1.10).clamp(1.5, 10.0)
         ),
         MotionProfile::Shake => format!(
-            "[{src}]crop=iw-6:ih-6:x='3+sin(t*5.3)*2':y='3+cos(t*4.7)*2',pad=iw+6:ih+6:3:3:color=black@0[{out}]"
+            "[{src}]crop=iw-6:ih-6:x='3+sin(t*{:.3})*{:.3}':y='3+cos(t*{:.3})*{:.3}',pad=iw+6:ih+6:3:3:color=black@0[{out}]",
+            (tuning.drift_freq_x * 2.7).clamp(3.0, 14.0),
+            (tuning.drift_amp_x * 0.85).clamp(1.0, 6.0),
+            (tuning.drift_freq_y * 2.8).clamp(3.0, 14.0),
+            (tuning.drift_amp_y * 0.90).clamp(1.0, 6.0)
         ),
         MotionProfile::Pulse => format!(
-            "[{src}]crop=iw-8:ih-8:x='4+sin(t*3.4)*3':y='4+cos(t*3.0)*2',pad=iw+8:ih+8:4:4:color=black@0[{out}]"
+            "[{src}]crop=iw-8:ih-8:x='4+sin(t*{:.3})*{:.3}':y='4+cos(t*{:.3})*{:.3}',pad=iw+8:ih+8:4:4:color=black@0[{out}]",
+            (tuning.drift_freq_x * 2.0).clamp(1.8, 10.0),
+            (tuning.drift_amp_x * 1.0).clamp(1.0, 8.0),
+            (tuning.drift_freq_y * 2.1).clamp(1.8, 10.0),
+            (tuning.drift_amp_y * 1.0).clamp(1.0, 7.0)
         ),
         MotionProfile::Drift => format!(
-            "[{src}]crop=iw-8:ih-8:x='4+sin(t*1.7)*3':y='4+cos(t*1.4)*2',pad=iw+8:ih+8:4:4:color=black@0[{out}]"
+            "[{src}]crop=iw-8:ih-8:x='4+sin(t*{:.3})*{:.3}':y='4+cos(t*{:.3})*{:.3}',pad=iw+8:ih+8:4:4:color=black@0[{out}]",
+            tuning.drift_freq_x,
+            tuning.drift_amp_x,
+            tuning.drift_freq_y,
+            tuning.drift_amp_y
         ),
     }
 }
@@ -315,7 +494,8 @@ fn build_masked_animated_proxy(
         return build_simple_animated_proxy(base_image, out, dry_run);
     }
 
-    let filter = build_masked_filter(layers, scene_w, scene_h, None);
+    let tuning = VisualTuning::default();
+    let filter = build_masked_filter(layers, scene_w, scene_h, None, &tuning);
 
     if dry_run {
         let mut args = format!(
@@ -383,6 +563,7 @@ fn build_masked_filter(
     scene_w: u32,
     scene_h: u32,
     audio_bars: Option<&AudioBarsOverlay>,
+    tuning: &VisualTuning,
 ) -> String {
     let scene_w = scene_w.max(1);
     let scene_h = scene_h.max(1);
@@ -406,25 +587,57 @@ fn build_masked_filter(
         let moved = format!("m{}", i);
         let mask_scaled = format!("ms{}", i);
         let mask = format!("k{}", i);
+        let mask_rot = format!("kr{}", i);
+        let mask_canvas = format!("kc{}", i);
+        let mask_placed = format!("kp{}", i);
         let masked = format!("a{}", i);
         let in_comp = format!("c{}", i);
         let out_comp = format!("c{}", i + 1);
         if i == 0 {
             filter.push_str("[s0]copy[c0];");
         }
-        filter.push_str(&filter_for_profile(layer.profile, &src, &moved));
+        filter.push_str(&filter_for_profile(layer.profile, &src, &moved, tuning));
         filter.push(';');
+        let layer_w = layer.width.max(8.0).min(scene_w as f32 * 2.0).round() as u32;
+        let layer_h = layer.height.max(8.0).min(scene_h as f32 * 2.0).round() as u32;
+        let center_x = if layer.center_x <= 0.0 {
+            scene_w as f32 * 0.5
+        } else {
+            layer.center_x.clamp(0.0, scene_w as f32)
+        };
+        let center_y = if layer.center_y <= 0.0 {
+            scene_h as f32 * 0.5
+        } else {
+            layer.center_y.clamp(0.0, scene_h as f32)
+        };
         filter.push_str(&format!(
             "[{}:v]scale={}:{}:flags=bicubic[{}];",
             i + 1,
-            scene_w,
-            scene_h,
+            layer_w,
+            layer_h,
             mask_scaled
         ));
         filter.push_str(&format!("[{}]format=gray,boxblur=2:1[{}];", mask_scaled, mask));
+        if layer.angle_rad.abs() > 0.001 {
+            filter.push_str(&format!(
+                "[{}]rotate={:.6}:c=black:ow=rotw(iw):oh=roth(ih)[{}];",
+                mask, -layer.angle_rad, mask_rot
+            ));
+        } else {
+            filter.push_str(&format!("[{}]copy[{}];", mask, mask_rot));
+        }
+        filter.push_str(&format!(
+            "color=c=black:s={}x{}:d=1,format=gray[{}];[{}][{}]overlay='{}-(overlay_w/2)':'{}-(overlay_h/2)':format=auto[{}];",
+            scene_w, scene_h, mask_canvas, mask_canvas, mask_rot, center_x, center_y, mask_placed
+        ));
         filter.push_str(&format!(
             "[{}][{}]alphamerge[tmp{}];[tmp{}]format=rgba,colorchannelmixer=aa={:.3}[{}];",
-            moved, mask, i, i, EFFECT_LAYER_ALPHA, masked
+            moved,
+            mask_placed,
+            i,
+            i,
+            (tuning.layer_alpha * layer.alpha).clamp(0.03, 0.95),
+            masked
         ));
         filter.push_str(&format!(
             "[{}][{}]overlay=0:0:format=auto[{}];",
@@ -479,11 +692,14 @@ fn build_masked_filter(
                 final_comp
             )),
         }
-        filter.push_str("[cv]eq=contrast=1.01:saturation=1.02,format=yuv420p[v]");
+        filter.push_str(&format!(
+            "[cv]eq=contrast={:.3}:saturation={:.3},format=yuv420p[v]",
+            tuning.contrast, tuning.saturation
+        ));
     } else {
         filter.push_str(&format!(
-            "[{}]eq=contrast=1.01:saturation=1.02,format=yuv420p[v]",
-            final_comp
+            "[{}]eq=contrast={:.3}:saturation={:.3},format=yuv420p[v]",
+            final_comp, tuning.contrast, tuning.saturation
         ));
     }
     filter
@@ -493,6 +709,7 @@ fn build_simple_filter(
     audio_bars: Option<&AudioBarsOverlay>,
     scene_w: u32,
     scene_h: u32,
+    tuning: &VisualTuning,
 ) -> String {
     if let Some(bars) = audio_bars {
         let opacity = bars.opacity.clamp(0.0, 1.0);
@@ -500,9 +717,9 @@ fn build_simple_filter(
         let scene_h = scene_h.max(1);
         let bars_x = bars.center_x;
         let bars_y = bars.center_y;
-        let mut f = concat!(
-            "[0:v]crop=iw-8:ih-8:x='4+sin(t*1.7)*3':y='4+cos(t*1.4)*2',",
-            "pad=iw+8:ih+8:4:4:color=black[base];"
+        let mut f = format!(
+            "[0:v]crop=iw-8:ih-8:x='4+sin(t*{:.3})*{:.3}':y='4+cos(t*{:.3})*{:.3}',pad=iw+8:ih+8:4:4:color=black[base];",
+            tuning.drift_freq_x, tuning.drift_amp_x, tuning.drift_freq_y, tuning.drift_amp_y
         )
         .to_string();
         f.push_str(&format!(
@@ -530,15 +747,21 @@ fn build_simple_filter(
             4 => f.push_str("[base][abp]blend=all_mode=multiply:all_opacity=1[mix];"),
             _ => f.push_str("[base][abp]overlay=0:0:format=auto[mix];"),
         }
-        f.push_str(" [mix]eq=contrast=1.01:saturation=1.02,format=yuv420p[v]");
+        f.push_str(&format!(
+            " [mix]eq=contrast={:.3}:saturation={:.3},format=yuv420p[v]",
+            tuning.contrast, tuning.saturation
+        ));
         return f;
     }
-    concat!(
-        "[0:v]crop=iw-8:ih-8:x='4+sin(t*1.7)*3':y='4+cos(t*1.4)*2',",
-        "pad=iw+8:ih+8:4:4:color=black,",
-        "eq=contrast=1.01:saturation=1.02,format=yuv420p[v]"
+    format!(
+        "[0:v]crop=iw-8:ih-8:x='4+sin(t*{:.3})*{:.3}':y='4+cos(t*{:.3})*{:.3}',pad=iw+8:ih+8:4:4:color=black,eq=contrast={:.3}:saturation={:.3},format=yuv420p[v]",
+        tuning.drift_freq_x,
+        tuning.drift_amp_x,
+        tuning.drift_freq_y,
+        tuning.drift_amp_y,
+        tuning.contrast,
+        tuning.saturation
     )
-    .to_string()
 }
 
 pub fn build_scene_realtime_effect_plan(
@@ -562,12 +785,23 @@ pub fn build_scene_realtime_effect_plan(
     let scene_json: Value = serde_json::from_slice(&read_entry_bytes(&pkg, &scene_entry)?)?;
     let (scene_w, scene_h) = parse_scene_size(&scene_json);
     let audio_bars = detect_audio_bars_overlay(&scene_json, scene_w, scene_h);
+    let graph = build_scene_gpu_graph(root).ok();
+    let tuning = graph
+        .as_ref()
+        .map(visual_tuning_from_graph)
+        .unwrap_or_default();
 
     let masks_src = session_dir.join("effect-proxy/masks-src");
     let masks_proxy = session_dir.join("effect-proxy/masks-proxy");
 
     let mut layers = Vec::<EffectLayer>::new();
-    for layer_ref in collect_effect_layer_refs(&scene_json, 24) {
+    let layer_refs = graph
+        .as_ref()
+        .map(|g| collect_effect_layer_refs_from_native_plan(g, 24))
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| collect_effect_layer_refs(&scene_json, 24));
+
+    for layer_ref in layer_refs {
         let Some(tex_entry) = find_tex_entry_for_texture_ref(&pkg, &layer_ref.texture_ref) else {
             continue;
         };
@@ -581,6 +815,13 @@ pub fn build_scene_realtime_effect_plan(
         layers.push(EffectLayer {
             mask_image,
             profile: layer_ref.profile,
+            alpha: layer_ref.alpha,
+            family: layer_ref.family.clone(),
+            center_x: layer_ref.center_x,
+            center_y: layer_ref.center_y,
+            width: layer_ref.width,
+            height: layer_ref.height,
+            angle_rad: layer_ref.angle_rad,
         });
         if layers.len() >= EFFECT_LAYER_LIMIT {
             break;
@@ -590,12 +831,21 @@ pub fn build_scene_realtime_effect_plan(
     let mut inputs = vec![entry.to_path_buf()];
     let filter_complex = if layers.is_empty() {
         // Audio bars are intentionally not burned into mp4/native ffmpeg output anymore.
-        build_simple_filter(None, scene_w, scene_h)
+        build_simple_filter(None, scene_w, scene_h, &tuning)
     } else {
         for layer in &layers {
             inputs.push(layer.mask_image.clone());
         }
-        build_masked_filter(&layers, scene_w, scene_h, None)
+        if !layers.is_empty() {
+            eprintln!(
+                "[ok] native families in realtime plan: {:?}",
+                layers
+                    .iter()
+                    .map(|l| l.family.clone())
+                    .collect::<Vec<_>>()
+            );
+        }
+        build_masked_filter(&layers, scene_w, scene_h, None, &tuning)
     };
 
     Ok(Some(RealtimeEffectPlan {
@@ -732,6 +982,13 @@ pub fn maybe_build_scene_animated_proxy(
         layers.push(EffectLayer {
             mask_image,
             profile: layer_ref.profile,
+            alpha: layer_ref.alpha,
+            family: layer_ref.family.clone(),
+            center_x: layer_ref.center_x,
+            center_y: layer_ref.center_y,
+            width: layer_ref.width,
+            height: layer_ref.height,
+            angle_rad: layer_ref.angle_rad,
         });
         if layers.len() >= EFFECT_LAYER_LIMIT {
             break;
@@ -745,4 +1002,91 @@ pub fn maybe_build_scene_animated_proxy(
     }
     let built = build_masked_animated_proxy(entry, &layers, scene_w, scene_h, &out_proxy, dry_run)?;
     Ok(Some(built))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_gpu_graph::{GpuEffectNode, GpuPassSpec, SceneGpuGraph};
+    use serde_json::json;
+
+    fn base_graph_with_uniforms() -> SceneGpuGraph {
+        SceneGpuGraph {
+            pkg_path: String::new(),
+            scene_json_entry: "scene.json".to_string(),
+            scene_width: 1920,
+            scene_height: 1080,
+            global_assets_root: None,
+            user_properties: Value::Null,
+            script_properties: Value::Null,
+            script_assignments: Vec::new(),
+            effect_nodes: vec![GpuEffectNode {
+                object_id: 1,
+                object_name: "obj".to_string(),
+                object_kind: "image".to_string(),
+                object_asset: Some("models/a.json".to_string()),
+                object_origin: Some([960.0, 540.0, 0.0]),
+                object_scale: Some([1.0, 1.0, 1.0]),
+                object_angles: Some([0.0, 0.0, 0.0]),
+                object_size: Some([1920.0, 1080.0]),
+                object_asset_size: Some([1920.0, 1080.0]),
+                object_parallax_depth: Some([1.0, 1.0]),
+                object_visible: true,
+                effect_file: "materials/a.json".to_string(),
+                effect_name: "genericimage".to_string(),
+                material_asset: Some("materials/a.json".to_string()),
+                pass_shader: "genericimage".to_string(),
+                pass_index: 0,
+                passes: vec![GpuPassSpec {
+                    pass_index: 0,
+                    shader: "genericimage".to_string(),
+                    combos: Value::Null,
+                    shader_defines: Vec::new(),
+                    blending: Some("normal".to_string()),
+                    depth_test: Some("disabled".to_string()),
+                    depth_write: Some("disabled".to_string()),
+                    cull_mode: Some("nocull".to_string()),
+                    constant_shader_values: Value::Null,
+                    user_shader_values: Value::Null,
+                    textures: vec!["materials/mask_a.tex".to_string()],
+                    texture_refs: vec!["mask_a".to_string()],
+                    effective_uniforms: [
+                        ("g_ScrollX".to_string(), json!(0.5)),
+                        ("g_ScrollY".to_string(), json!(0.25)),
+                        ("g_Brightness".to_string(), json!(1.4)),
+                        ("g_Power".to_string(), json!(1.6)),
+                        ("g_UserAlpha".to_string(), json!(0.4)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                }],
+                shader_vert: None,
+                shader_frag: None,
+                material_json: Some("materials/a.json".to_string()),
+                uniform_bindings: Vec::new(),
+            }],
+            notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn tuning_uses_effective_uniforms() {
+        let graph = base_graph_with_uniforms();
+        let tuning = visual_tuning_from_graph(&graph);
+        assert!(tuning.drift_amp_x > 3.0);
+        assert!(tuning.drift_amp_y > 2.0);
+        assert!(tuning.saturation > DEFAULT_SATURATION);
+        assert!(tuning.contrast > DEFAULT_CONTRAST);
+        assert!(tuning.layer_alpha < EFFECT_LAYER_ALPHA);
+    }
+
+    #[test]
+    fn layer_refs_can_come_from_graph() {
+        let graph = base_graph_with_uniforms();
+        let refs = collect_effect_layer_refs_from_native_plan(&graph, 8);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].texture_ref, "materials/mask_a.tex");
+        assert_eq!(refs[0].family, "genericimage");
+        assert!((refs[0].alpha - 0.4).abs() < 0.0001);
+    }
 }
