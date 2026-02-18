@@ -254,7 +254,11 @@ pub fn scan_library(
         .into_iter()
         .map(|(effect_file, count)| EffectFrequency { effect_file, count })
         .collect();
-    top.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.effect_file.cmp(&b.effect_file)));
+    top.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.effect_file.cmp(&b.effect_file))
+    });
     if top.len() > top_effects {
         top.truncate(top_effects);
     }
@@ -270,10 +274,7 @@ pub fn scan_library(
     })
 }
 
-pub fn build_library_roadmap(
-    downloads_root: &Path,
-    top_n: usize,
-) -> Result<LibraryRoadmapReport> {
+pub fn build_library_roadmap(downloads_root: &Path, top_n: usize) -> Result<LibraryRoadmapReport> {
     let report = scan_library(downloads_root, 500, false)?;
     let mut effect_to_scores = HashMap::<String, Vec<u8>>::new();
     let mut dirs = Vec::new();

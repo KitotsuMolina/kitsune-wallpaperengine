@@ -1,12 +1,13 @@
+use crate::audio::infer_default_monitor_source;
 use crate::cli::{AudioBarsSource, GpuTransport, PlaybackProfile};
 use crate::playback::launch_mpvpaper_with_extra;
-use crate::audio::infer_default_monitor_source;
 use crate::scene_effect_proxy::{
-    build_scene_audio_bars_overlay, build_scene_realtime_effect_plan, maybe_build_scene_animated_proxy,
+    build_scene_audio_bars_overlay, build_scene_realtime_effect_plan,
+    maybe_build_scene_animated_proxy,
 };
 use crate::scene_gpu_graph::build_scene_gpu_graph;
-use crate::scene_native_runtime::build_native_runtime_plan;
 use crate::scene_native_renderer::{render_native_animated_proxy, render_native_static_frame};
+use crate::scene_native_runtime::build_native_runtime_plan;
 use crate::scene_pkg::{extract_entry_to_cache, parse_scene_pkg};
 use crate::scene_renderer::build_scene_render_session;
 use crate::scene_text::{build_scene_drawtext_filter, start_text_refresh_daemon};
@@ -381,7 +382,11 @@ No se recomienda su activacion por ahora. Si quieres espectros de audio estables
                     native_static_report_path = Some(
                         Path::new(&report.output_image)
                             .parent()
-                            .map(|p| p.join("native_static_report.json").to_string_lossy().to_string())
+                            .map(|p| {
+                                p.join("native_static_report.json")
+                                    .to_string_lossy()
+                                    .to_string()
+                            })
                             .unwrap_or_default(),
                     );
                     effective_transport = "native-static-layered".to_string();
@@ -397,7 +402,9 @@ No se recomienda su activacion por ahora. Si quieres espectros de audio estables
                         if args.require_native {
                             bail!("native-realtime requested but no realtime plan could be built");
                         }
-                        eprintln!("[warn] native-realtime plan unavailable, falling back to mp4-proxy");
+                        eprintln!(
+                            "[warn] native-realtime plan unavailable, falling back to mp4-proxy"
+                        );
                         effective_transport = "mp4-proxy (fallback)".to_string();
                         let animated_entry = match maybe_build_scene_animated_proxy(
                             &args.root,
@@ -456,11 +463,9 @@ No se recomienda su activacion por ahora. Si quieres espectros de audio estables
                                             .unwrap_or_else(|_| "default".to_string());
                                         cmdline.push_str(&format!(" -f pulse -i '{}'", pulse_src));
                                     }
-                                    AudioBarsSource::Synth => {
-                                        cmdline.push_str(
-                                            " -f lavfi -i anoisesrc=color=pink:amplitude=0.4",
-                                        )
-                                    }
+                                    AudioBarsSource::Synth => cmdline.push_str(
+                                        " -f lavfi -i anoisesrc=color=pink:amplitude=0.4",
+                                    ),
                                 }
                             }
                             cmdline.push_str(&format!(
@@ -524,8 +529,9 @@ No se recomienda su activacion por ahora. Si quieres espectros de audio estables
                                 .spawn()
                                 .context("Failed to spawn native-realtime ffmpeg")?;
                             let child_id = child.id();
-                            std::fs::write(&pid_file, child_id.to_string())
-                                .with_context(|| format!("Failed writing {}", pid_file.display()))?;
+                            std::fs::write(&pid_file, child_id.to_string()).with_context(|| {
+                                format!("Failed writing {}", pid_file.display())
+                            })?;
                             thread::sleep(Duration::from_millis(1800));
                             let alive = Command::new("kill")
                                 .arg("-0")
@@ -589,207 +595,207 @@ No se recomienda su activacion por ahora. Si quieres espectros de audio estables
                 }
             }
         } else {
-        let plan_opt = build_scene_realtime_effect_plan(
-            &args.root,
-            Path::new(&session.session_dir),
-            Path::new(&entry_to_launch),
-        )?;
-        if plan_opt.is_none() {
-            if args.require_native {
-                bail!("native-realtime requested but no realtime plan could be built");
-            }
-            eprintln!("[warn] native-realtime plan unavailable, falling back to mp4-proxy");
-            effective_transport = "mp4-proxy (fallback)".to_string();
-            let animated_entry = match maybe_build_scene_animated_proxy(
+            let plan_opt = build_scene_realtime_effect_plan(
                 &args.root,
                 Path::new(&session.session_dir),
                 Path::new(&entry_to_launch),
-                args.dry_run,
-            )? {
-                Some(p) => p.to_string_lossy().to_string(),
-                None => entry_to_launch.clone(),
-            };
-            maybe_build_optimized_proxy(
-                Path::new(&animated_entry),
-                Path::new(&session.session_dir),
-                args.proxy_width,
-                args.proxy_fps,
-                args.proxy_crf,
-                args.dry_run,
-            )?
-            .to_string_lossy()
-            .to_string()
-        } else {
-            let plan = plan_opt.expect("checked is_some");
-            if args.require_native
-                && native_plan.ready_nodes == 0
-                && native_plan.total_pass_nodes > 0
-            {
-                bail!(
-                    "native-realtime requested but no ready shader families in native plan. See {}",
-                    native_plan_path.display()
-                );
-            }
-
-            let port_base = 19000u16;
-            let mut hash: u32 = 0;
-            for b in cache_key_for_root(&args.root).as_bytes() {
-                hash = hash.wrapping_mul(31).wrapping_add(*b as u32);
-            }
-            let port = port_base + (hash % 5000) as u16;
-            let stream_url = format!("udp://127.0.0.1:{}", port);
-
-            let pid_file = realtime_pid_path(&args.root);
-            if let Ok(pid_raw) = std::fs::read_to_string(&pid_file) {
-                if let Ok(pid) = pid_raw.trim().parse::<u32>() {
-                    let _ = Command::new("kill").arg(pid.to_string()).status();
+            )?;
+            if plan_opt.is_none() {
+                if args.require_native {
+                    bail!("native-realtime requested but no realtime plan could be built");
                 }
-            }
+                eprintln!("[warn] native-realtime plan unavailable, falling back to mp4-proxy");
+                effective_transport = "mp4-proxy (fallback)".to_string();
+                let animated_entry = match maybe_build_scene_animated_proxy(
+                    &args.root,
+                    Path::new(&session.session_dir),
+                    Path::new(&entry_to_launch),
+                    args.dry_run,
+                )? {
+                    Some(p) => p.to_string_lossy().to_string(),
+                    None => entry_to_launch.clone(),
+                };
+                maybe_build_optimized_proxy(
+                    Path::new(&animated_entry),
+                    Path::new(&session.session_dir),
+                    args.proxy_width,
+                    args.proxy_fps,
+                    args.proxy_crf,
+                    args.dry_run,
+                )?
+                .to_string_lossy()
+                .to_string()
+            } else {
+                let plan = plan_opt.expect("checked is_some");
+                if args.require_native
+                    && native_plan.ready_nodes == 0
+                    && native_plan.total_pass_nodes > 0
+                {
+                    bail!(
+                        "native-realtime requested but no ready shader families in native plan. See {}",
+                        native_plan_path.display()
+                    );
+                }
+
+                let port_base = 19000u16;
+                let mut hash: u32 = 0;
+                for b in cache_key_for_root(&args.root).as_bytes() {
+                    hash = hash.wrapping_mul(31).wrapping_add(*b as u32);
+                }
+                let port = port_base + (hash % 5000) as u16;
+                let stream_url = format!("udp://127.0.0.1:{}", port);
+
+                let pid_file = realtime_pid_path(&args.root);
+                if let Ok(pid_raw) = std::fs::read_to_string(&pid_file) {
+                    if let Ok(pid) = pid_raw.trim().parse::<u32>() {
+                        let _ = Command::new("kill").arg(pid.to_string()).status();
+                    }
+                }
 
                 if args.dry_run {
                     let mut cmdline =
-                    "[dry-run] ffmpeg -hide_banner -loglevel warning -re -stream_loop -1"
-                        .to_string();
-                for input in &plan.inputs {
-                    cmdline.push_str(&format!(" -loop 1 -i '{}'", input.display()));
-                }
-                if plan.needs_audio_input {
-                    match args.audio_bars_source {
-                        AudioBarsSource::Pulse => {
-                            let pulse_src = infer_default_monitor_source()
-                                .unwrap_or_else(|_| "default".to_string());
-                            cmdline.push_str(&format!(" -f pulse -i '{}'", pulse_src));
-                        }
-                        AudioBarsSource::Synth => {
-                            cmdline.push_str(" -f lavfi -i anoisesrc=color=pink:amplitude=0.4")
+                        "[dry-run] ffmpeg -hide_banner -loglevel warning -re -stream_loop -1"
+                            .to_string();
+                    for input in &plan.inputs {
+                        cmdline.push_str(&format!(" -loop 1 -i '{}'", input.display()));
+                    }
+                    if plan.needs_audio_input {
+                        match args.audio_bars_source {
+                            AudioBarsSource::Pulse => {
+                                let pulse_src = infer_default_monitor_source()
+                                    .unwrap_or_else(|_| "default".to_string());
+                                cmdline.push_str(&format!(" -f pulse -i '{}'", pulse_src));
+                            }
+                            AudioBarsSource::Synth => {
+                                cmdline.push_str(" -f lavfi -i anoisesrc=color=pink:amplitude=0.4")
+                            }
                         }
                     }
-                }
-                cmdline.push_str(&format!(
-                    " -filter_complex \"{}\" -map '[v]' -r {} -an -f mpegts '{}'",
-                    plan.filter_complex, args.proxy_fps, stream_url
-                ));
-                println!("{}", cmdline);
-            } else {
-                if let Some(parent) = pid_file.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
-                let native_log = "/tmp/kwe-native-ffmpeg.log";
-                let log_file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .open(native_log)
-                    .with_context(|| format!("Failed to open {}", native_log))?;
-                let log_file_err = log_file
-                    .try_clone()
-                    .with_context(|| format!("Failed to clone {}", native_log))?;
-                let mut cmd = Command::new("ffmpeg");
-                cmd.arg("-hide_banner")
-                    .arg("-loglevel")
-                    .arg("warning")
-                    .arg("-re")
-                    .arg("-stream_loop")
-                    .arg("-1");
-                for input in &plan.inputs {
-                    cmd.arg("-loop").arg("1").arg("-i").arg(input);
-                }
-                if plan.needs_audio_input {
-                    match args.audio_bars_source {
-                        AudioBarsSource::Pulse => {
-                            let pulse_src = infer_default_monitor_source()
-                                .unwrap_or_else(|_| "default".to_string());
-                            cmd.arg("-f").arg("pulse").arg("-i").arg(pulse_src);
-                        }
-                        AudioBarsSource::Synth => {
-                            cmd.arg("-f")
-                                .arg("lavfi")
-                                .arg("-i")
-                                .arg("anoisesrc=color=pink:amplitude=0.4");
+                    cmdline.push_str(&format!(
+                        " -filter_complex \"{}\" -map '[v]' -r {} -an -f mpegts '{}'",
+                        plan.filter_complex, args.proxy_fps, stream_url
+                    ));
+                    println!("{}", cmdline);
+                } else {
+                    if let Some(parent) = pid_file.parent() {
+                        std::fs::create_dir_all(parent).ok();
+                    }
+                    let native_log = "/tmp/kwe-native-ffmpeg.log";
+                    let log_file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(native_log)
+                        .with_context(|| format!("Failed to open {}", native_log))?;
+                    let log_file_err = log_file
+                        .try_clone()
+                        .with_context(|| format!("Failed to clone {}", native_log))?;
+                    let mut cmd = Command::new("ffmpeg");
+                    cmd.arg("-hide_banner")
+                        .arg("-loglevel")
+                        .arg("warning")
+                        .arg("-re")
+                        .arg("-stream_loop")
+                        .arg("-1");
+                    for input in &plan.inputs {
+                        cmd.arg("-loop").arg("1").arg("-i").arg(input);
+                    }
+                    if plan.needs_audio_input {
+                        match args.audio_bars_source {
+                            AudioBarsSource::Pulse => {
+                                let pulse_src = infer_default_monitor_source()
+                                    .unwrap_or_else(|_| "default".to_string());
+                                cmd.arg("-f").arg("pulse").arg("-i").arg(pulse_src);
+                            }
+                            AudioBarsSource::Synth => {
+                                cmd.arg("-f")
+                                    .arg("lavfi")
+                                    .arg("-i")
+                                    .arg("anoisesrc=color=pink:amplitude=0.4");
+                            }
                         }
                     }
-                }
-                let child = cmd
-                    .arg("-filter_complex")
-                    .arg(&plan.filter_complex)
-                    .arg("-map")
-                    .arg("[v]")
-                    .arg("-r")
-                    .arg(args.proxy_fps.to_string())
-                    .arg("-an")
-                    .arg("-f")
-                    .arg("mpegts")
-                    .arg(&stream_url)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(log_file)
-                    .stderr(log_file_err)
-                    .spawn()
-                    .context("Failed to spawn native-realtime ffmpeg")?;
-                let child_id = child.id();
-                std::fs::write(&pid_file, child_id.to_string())
-                    .with_context(|| format!("Failed writing {}", pid_file.display()))?;
-                // Give native ffmpeg enough time to fail fast on invalid filters/input.
-                thread::sleep(Duration::from_millis(1800));
-                let alive = Command::new("kill")
-                    .arg("-0")
-                    .arg(child_id.to_string())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                if !alive {
-                    if args.require_native {
-                        bail!(
-                            "native-realtime ffmpeg exited on startup. See {}",
+                    let child = cmd
+                        .arg("-filter_complex")
+                        .arg(&plan.filter_complex)
+                        .arg("-map")
+                        .arg("[v]")
+                        .arg("-r")
+                        .arg(args.proxy_fps.to_string())
+                        .arg("-an")
+                        .arg("-f")
+                        .arg("mpegts")
+                        .arg(&stream_url)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(log_file)
+                        .stderr(log_file_err)
+                        .spawn()
+                        .context("Failed to spawn native-realtime ffmpeg")?;
+                    let child_id = child.id();
+                    std::fs::write(&pid_file, child_id.to_string())
+                        .with_context(|| format!("Failed writing {}", pid_file.display()))?;
+                    // Give native ffmpeg enough time to fail fast on invalid filters/input.
+                    thread::sleep(Duration::from_millis(1800));
+                    let alive = Command::new("kill")
+                        .arg("-0")
+                        .arg(child_id.to_string())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    if !alive {
+                        if args.require_native {
+                            bail!(
+                                "native-realtime ffmpeg exited on startup. See {}",
+                                native_log
+                            );
+                        }
+                        eprintln!(
+                            "[warn] native-realtime ffmpeg failed, falling back to mp4-proxy (log: {})",
                             native_log
                         );
-                    }
-                    eprintln!(
-                        "[warn] native-realtime ffmpeg failed, falling back to mp4-proxy (log: {})",
-                        native_log
-                    );
-                    effective_transport = "mp4-proxy (fallback)".to_string();
-                    let animated_entry = match maybe_build_scene_animated_proxy(
-                        &args.root,
-                        Path::new(&session.session_dir),
-                        Path::new(&entry_to_launch),
-                        args.dry_run,
-                    )? {
-                        Some(p) => p.to_string_lossy().to_string(),
-                        None => entry_to_launch.clone(),
-                    };
-                    return Ok(SceneGpuPlayResult {
-                        final_entry: maybe_build_optimized_proxy(
-                            Path::new(&animated_entry),
+                        effective_transport = "mp4-proxy (fallback)".to_string();
+                        let animated_entry = match maybe_build_scene_animated_proxy(
+                            &args.root,
                             Path::new(&session.session_dir),
-                            args.proxy_width,
-                            args.proxy_fps,
-                            args.proxy_crf,
+                            Path::new(&entry_to_launch),
                             args.dry_run,
-                        )?
-                        .to_string_lossy()
-                        .to_string(),
-                        gpu_manifest_path: Path::new(&session.session_dir)
-                            .join("gpu/manifest.json")
+                        )? {
+                            Some(p) => p.to_string_lossy().to_string(),
+                            None => entry_to_launch.clone(),
+                        };
+                        return Ok(SceneGpuPlayResult {
+                            final_entry: maybe_build_optimized_proxy(
+                                Path::new(&animated_entry),
+                                Path::new(&session.session_dir),
+                                args.proxy_width,
+                                args.proxy_fps,
+                                args.proxy_crf,
+                                args.dry_run,
+                            )?
                             .to_string_lossy()
                             .to_string(),
-                        scene_session_dir: session.session_dir,
-                        scene_manifest_path: session.manifest_path,
-                        gpu_effect_nodes: graph.effect_nodes.len(),
-                        requested_transport,
-                        effective_transport,
-                        native_runtime_plan_path: Some(
-                            native_plan_path.to_string_lossy().to_string(),
-                        ),
-                        native_static_report_path: native_static_report_path.clone(),
-                        audio_overlay_plan_path: None,
-                        kitsune_overlay_applied: false,
-                        kitsune_overlay_message: None,
-                    });
+                            gpu_manifest_path: Path::new(&session.session_dir)
+                                .join("gpu/manifest.json")
+                                .to_string_lossy()
+                                .to_string(),
+                            scene_session_dir: session.session_dir,
+                            scene_manifest_path: session.manifest_path,
+                            gpu_effect_nodes: graph.effect_nodes.len(),
+                            requested_transport,
+                            effective_transport,
+                            native_runtime_plan_path: Some(
+                                native_plan_path.to_string_lossy().to_string(),
+                            ),
+                            native_static_report_path: native_static_report_path.clone(),
+                            audio_overlay_plan_path: None,
+                            kitsune_overlay_applied: false,
+                            kitsune_overlay_message: None,
+                        });
+                    }
                 }
-            }
 
-            stream_url
-        }
+                stream_url
+            }
         }
     } else {
         let animated_entry = match maybe_build_scene_animated_proxy(
@@ -847,15 +853,19 @@ No se recomienda su activacion por ahora. Si quieres espectros de audio estables
             "Current playback still uses mpvpaper transport with generated scene media".to_string(),
             "Next milestone: native shader execution backend replacing media proxy step"
                 .to_string(),
-            "Audio bars are exported as overlay metadata and not burned into ffmpeg scene output".to_string(),
+            "Audio bars are exported as overlay metadata and not burned into ffmpeg scene output"
+                .to_string(),
             format!("Requested transport: {}", requested_transport),
             format!("Effective transport: {}", effective_transport),
             format!("Native families ready: {:?}", native_plan.ready_families),
         ],
     };
     let gpu_manifest_path = gpu_dir.join("manifest.json");
-    std::fs::write(&gpu_manifest_path, serde_json::to_vec_pretty(&gpu_manifest)?)
-        .with_context(|| format!("Failed writing {}", gpu_manifest_path.display()))?;
+    std::fs::write(
+        &gpu_manifest_path,
+        serde_json::to_vec_pretty(&gpu_manifest)?,
+    )
+    .with_context(|| format!("Failed writing {}", gpu_manifest_path.display()))?;
 
     let audio_overlay_plan_path = if let Some(plan) = audio_overlay_plan {
         let path = gpu_dir.join("audio-bars-overlay.json");

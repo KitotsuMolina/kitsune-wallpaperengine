@@ -268,7 +268,10 @@ fn extract_transform_effect(object: &Value) -> (f32, f32, f32) {
 fn prop_bool(v: Option<&Value>, default: bool) -> bool {
     match v {
         Some(Value::Bool(b)) => *b,
-        Some(Value::Object(map)) => map.get("value").and_then(|x| x.as_bool()).unwrap_or(default),
+        Some(Value::Object(map)) => map
+            .get("value")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(default),
         _ => default,
     }
 }
@@ -281,7 +284,11 @@ fn prop_str<'a>(v: Option<&'a Value>) -> Option<&'a str> {
     }
 }
 
-fn build_day_or_date_text(name: &str, script: &str, props: Option<&serde_json::Map<String, Value>>) -> Option<String> {
+fn build_day_or_date_text(
+    name: &str,
+    script: &str,
+    props: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
     let now = Local::now();
     let script_lower = script.to_ascii_lowercase();
     let show_day = prop_bool(props.and_then(|m| m.get("showDay")), name.contains("day"));
@@ -354,12 +361,7 @@ fn build_clock_text(props: Option<&serde_json::Map<String, Value>>) -> Option<St
     let delimiter = prop_str(props.and_then(|m| m.get("delimiter"))).unwrap_or(":");
 
     if use_24h {
-        let base = format!(
-            "{:02}{}{:02}",
-            now.hour(),
-            delimiter,
-            now.minute()
-        );
+        let base = format!("{:02}{}{:02}", now.hour(), delimiter, now.minute());
         if show_seconds {
             return Some(format!("{}{}{:02}", base, delimiter, now.second()));
         }
@@ -403,7 +405,10 @@ fn infer_text_expr(object: &Value) -> Option<String> {
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    let props = text_obj.and_then(|v| v.as_object()).and_then(|m| m.get("scriptproperties")).and_then(|v| v.as_object());
+    let props = text_obj
+        .and_then(|v| v.as_object())
+        .and_then(|m| m.get("scriptproperties"))
+        .and_then(|v| v.as_object());
 
     if script.contains("gethours") && script.contains("getminutes") {
         if let Some(clock) = build_clock_text(props) {
@@ -560,7 +565,12 @@ fn build_drawtext_for_object(
 
     Some(format!(
         "drawtext={}:fontcolor={}:fontsize=h*{:.5}:x={}:y={}:borderw=0:shadowx=1:shadowy=1:shadowcolor=0x00000099{font}",
-        text_input, color, size_ratio, x_expr, y_expr, font = font_opt
+        text_input,
+        color,
+        size_ratio,
+        x_expr,
+        y_expr,
+        font = font_opt
     ))
 }
 
@@ -589,16 +599,14 @@ pub fn build_scene_drawtext_filter(root: &Path, max_layers: usize) -> Result<Opt
             if !has_text {
                 continue;
             }
-            if let Some(layer) =
-                build_drawtext_for_object(
-                    object,
-                    scene_w,
-                    scene_h,
-                    &pkg,
-                    &font_cache_dir,
-                    &text_cache_dir,
-                )
-            {
+            if let Some(layer) = build_drawtext_for_object(
+                object,
+                scene_w,
+                scene_h,
+                &pkg,
+                &font_cache_dir,
+                &text_cache_dir,
+            ) {
                 layers.push(layer);
                 if is_dynamic_text_object(object) {
                     let file_path = text_cache_dir.join(format!("obj_{}.txt", object_id(object)));

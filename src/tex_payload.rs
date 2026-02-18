@@ -95,7 +95,8 @@ fn encode_raw_to_png(payload: &[u8], width: u32, height: u32) -> Option<Vec<u8>>
 
     let mut out = Vec::<u8>::new();
     let enc = PngEncoder::new(&mut out);
-    enc.write_image(&bytes, width, height, color_type.into()).ok()?;
+    enc.write_image(&bytes, width, height, color_type.into())
+        .ok()?;
     Some(out)
 }
 
@@ -103,9 +104,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn extract_payload_by_signature(tex_path: &Path, out_dir: &Path) -> Result<Option<PathBuf>> {
@@ -274,8 +273,12 @@ pub fn extract_playable_proxy_from_tex(tex_path: &Path, out_dir: &Path) -> Resul
 
     let payload = if compression != 0 {
         let mut compressed = vec![0u8; compressed_size.max(0) as usize];
-        f.read_exact(&mut compressed)
-            .with_context(|| format!("Failed reading compressed payload from {}", tex_path.display()))?;
+        f.read_exact(&mut compressed).with_context(|| {
+            format!(
+                "Failed reading compressed payload from {}",
+                tex_path.display()
+            )
+        })?;
         match decompress(&compressed, uncompressed_size as usize) {
             Ok(data) => data,
             Err(_) => {
@@ -293,8 +296,16 @@ pub fn extract_playable_proxy_from_tex(tex_path: &Path, out_dir: &Path) -> Resul
     let Some(ext) = detect_payload_ext(&payload) else {
         if let Some(png) = encode_raw_to_png(
             &payload,
-            if mip_width > 0 { mip_width } else { texture_width },
-            if mip_height > 0 { mip_height } else { texture_height },
+            if mip_width > 0 {
+                mip_width
+            } else {
+                texture_width
+            },
+            if mip_height > 0 {
+                mip_height
+            } else {
+                texture_height
+            },
         ) {
             fs::create_dir_all(out_dir)
                 .with_context(|| format!("Failed to create proxy dir {}", out_dir.display()))?;

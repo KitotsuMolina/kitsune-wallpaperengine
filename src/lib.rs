@@ -1,20 +1,20 @@
 use anyhow::{Context, Result, bail};
 
-pub mod audio;
 pub mod asset_resolver;
+pub mod audio;
 pub mod cli;
 pub mod library_scan;
 pub mod playback;
+pub mod scene_effect_proxy;
+pub mod scene_gpu_backend;
+pub mod scene_gpu_graph;
+pub mod scene_native_renderer;
+pub mod scene_native_runtime;
 pub mod scene_pkg;
 pub mod scene_plan;
 pub mod scene_renderer;
 pub mod scene_runtime;
 pub mod scene_script;
-pub mod scene_effect_proxy;
-pub mod scene_gpu_backend;
-pub mod scene_gpu_graph;
-pub mod scene_native_runtime;
-pub mod scene_native_renderer;
 pub mod scene_text;
 pub mod services;
 pub mod tex_payload;
@@ -25,18 +25,18 @@ pub mod wallpaper;
 
 use audio::{probe_audio, stream_audio_levels};
 use cli::{Cli, Commands};
+use library_scan::{build_library_roadmap, scan_library};
 use playback::{launch_mpvpaper, launch_mpvpaper_with_extra, stop_existing_mpvpaper_for_monitor};
+use scene_effect_proxy::{build_scene_audio_bars_overlay, maybe_build_scene_animated_proxy};
+use scene_gpu_backend::{SceneGpuPlayArgs, scene_gpu_play};
+use scene_gpu_graph::build_scene_gpu_graph;
+use scene_native_runtime::build_native_runtime_plan;
 use scene_pkg::{
     best_video_entry, default_scene_cache_root, extract_entry_to_cache, parse_scene_pkg,
 };
 use scene_plan::build_scene_plan;
-use scene_gpu_backend::{SceneGpuPlayArgs, scene_gpu_play};
-use scene_gpu_graph::build_scene_gpu_graph;
-use scene_native_runtime::build_native_runtime_plan;
 use scene_renderer::build_scene_render_session;
 use scene_runtime::run_scene_runtime;
-use scene_effect_proxy::{build_scene_audio_bars_overlay, maybe_build_scene_animated_proxy};
-use library_scan::{build_library_roadmap, scan_library};
 use scene_text::{
     build_scene_drawtext_filter, run_text_refresh, run_text_refresh_loop, start_text_refresh_daemon,
 };

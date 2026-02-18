@@ -12,6 +12,7 @@ pub enum NativeSupportTier {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NativePassSupport {
+    pub object_index: usize,
     pub object_id: u64,
     pub object_name: String,
     pub pass_index: usize,
@@ -24,6 +25,7 @@ pub struct NativePassSupport {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NativeDrawLayer {
+    pub object_index: usize,
     pub object_id: u64,
     pub object_name: String,
     pub pass_index: usize,
@@ -216,7 +218,12 @@ fn first_texture(pass: &GpuPassSpec) -> Option<String> {
         .iter()
         .find(|t| !t.trim().is_empty())
         .cloned()
-        .or_else(|| pass.texture_refs.iter().find(|t| !t.trim().is_empty()).cloned())
+        .or_else(|| {
+            pass.texture_refs
+                .iter()
+                .find(|t| !t.trim().is_empty())
+                .cloned()
+        })
 }
 
 fn with_texture_gate(
@@ -286,6 +293,7 @@ pub fn build_native_runtime_plan(graph: &SceneGpuGraph) -> NativeRuntimePlan {
             }
 
             passes.push(NativePassSupport {
+                object_index: node.object_index,
                 object_id: node.object_id,
                 object_name: node.object_name.clone(),
                 pass_index: pass.pass_index,
@@ -302,6 +310,7 @@ pub fn build_native_runtime_plan(graph: &SceneGpuGraph) -> NativeRuntimePlan {
                 .map(|v| (v[0] + v[1]) * 0.5)
                 .unwrap_or(1.0);
             draw_layers.push(NativeDrawLayer {
+                object_index: node.object_index,
                 center_x,
                 center_y,
                 width,
@@ -341,11 +350,15 @@ pub fn build_native_runtime_plan(graph: &SceneGpuGraph) -> NativeRuntimePlan {
         }
     }
     draw_layers.sort_by(|a, b| {
-        a.parallax_depth
-            .partial_cmp(&b.parallax_depth)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.object_id.cmp(&b.object_id))
+        a.object_index
+            .cmp(&b.object_index)
             .then_with(|| a.pass_index.cmp(&b.pass_index))
+            .then_with(|| {
+                a.parallax_depth
+                    .partial_cmp(&b.parallax_depth)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.object_id.cmp(&b.object_id))
     });
 
     let mut notes = Vec::<String>::new();

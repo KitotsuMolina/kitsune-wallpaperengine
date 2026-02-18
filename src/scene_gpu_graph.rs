@@ -1,5 +1,7 @@
 use crate::asset_resolver::AssetResolver;
-use crate::scene_script::{ScriptAssignment, apply_scene_scripts, collect_scene_user_properties, to_json_object};
+use crate::scene_script::{
+    ScriptAssignment, apply_scene_scripts, collect_scene_user_properties, to_json_object,
+};
 use anyhow::{Result, bail};
 use serde::Serialize;
 use serde_json::Value;
@@ -34,6 +36,7 @@ pub struct ShaderUniformBinding {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct GpuEffectNode {
+    pub object_index: usize,
     pub object_id: u64,
     pub object_name: String,
     pub object_kind: String,
@@ -45,6 +48,8 @@ pub struct GpuEffectNode {
     pub object_asset_size: Option<[f32; 2]>,
     pub object_parallax_depth: Option<[f32; 2]>,
     pub object_visible: bool,
+    pub effect_index: Option<usize>,
+    pub instance_override: Value,
     pub effect_file: String,
     pub effect_name: String,
     pub material_asset: Option<String>,
@@ -140,7 +145,11 @@ fn value_as_str(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(s.trim().to_string()),
         Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(if *b { "true".to_string() } else { "false".to_string() }),
+        Value::Bool(b) => Some(if *b {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }),
         _ => None,
     }
 }
@@ -219,7 +228,9 @@ fn eval_visible_predicate(expr: &str, user_values: &BTreeMap<String, Value>) -> 
         return Some(match v {
             Value::Bool(b) => *b,
             Value::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
-            Value::String(s) => !s.trim().is_empty() && s != "0" && !s.eq_ignore_ascii_case("false"),
+            Value::String(s) => {
+                !s.trim().is_empty() && s != "0" && !s.eq_ignore_ascii_case("false")
+            }
             _ => false,
         });
     }
@@ -325,7 +336,11 @@ fn eval_visible_expr(expr: &str, user_values: &BTreeMap<String, Value>) -> Optio
     base.map(|v| if negate { !v } else { v })
 }
 
-fn eval_visible_condition(cond: &str, user_name: Option<&str>, user_values: &BTreeMap<String, Value>) -> Option<bool> {
+fn eval_visible_condition(
+    cond: &str,
+    user_name: Option<&str>,
+    user_values: &BTreeMap<String, Value>,
+) -> Option<bool> {
     let base = cond.trim();
     if base.is_empty() {
         return None;
@@ -348,7 +363,10 @@ fn parse_object_visible(value: Option<&Value>, user_values: &BTreeMap<String, Va
     if let Some(obj) = v.as_object() {
         let fallback_value = obj.get("value").and_then(|x| x.as_bool());
         if let Some(user_obj) = obj.get("user").and_then(|u| u.as_object()) {
-            let condition = user_obj.get("condition").and_then(|x| x.as_str()).unwrap_or_default();
+            let condition = user_obj
+                .get("condition")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default();
             let user_name = user_obj.get("name").and_then(|x| x.as_str());
             if let Some(result) = eval_visible_condition(condition, user_name, user_values) {
                 return result;
@@ -395,6 +413,56 @@ fn parse_json_asset(resolver: &AssetResolver, path: &str) -> Option<(Value, Stri
     Some((json, asset.resolved_path))
 }
 
+fn resolve_user_bound_value(v: &Value, user_values: &BTreeMap<String, Value>) -> Value {
+    if let Some(obj) = v.as_object() {
+        if let Some(user) = obj.get("user").and_then(|u| u.as_str()) {
+            return user_values
+                .get(user)
+                .cloned()
+                .or_else(|| obj.get("value").cloned())
+                .unwrap_or(Value::Null);
+        }
+
+        let mut out = serde_json::Map::new();
+        for (k, child) in obj {
+            out.insert(k.clone(), resolve_user_bound_value(child, user_values));
+        }
+        return Value::Object(out);
+    }
+    if let Some(arr) = v.as_array() {
+        return Value::Array(
+            arr.iter()
+                .map(|x| resolve_user_bound_value(x, user_values))
+                .collect(),
+        );
+    }
+    v.clone()
+}
+
+fn apply_instance_override_uniforms(
+    uniforms: &mut BTreeMap<String, Value>,
+    instance_override: &Value,
+) {
+    let Some(map) = instance_override.as_object() else {
+        return;
+    };
+    if let Some(alpha) = map.get("alpha") {
+        uniforms.insert("g_UserAlpha".to_string(), alpha.clone());
+    }
+    if let Some(brightness) = map.get("brightness") {
+        uniforms.insert("g_Brightness".to_string(), brightness.clone());
+    }
+    if let Some(color) = map.get("color") {
+        uniforms.insert("g_EmissiveColor".to_string(), color.clone());
+    }
+    if let Some(count) = map.get("count") {
+        uniforms.insert("instance_count".to_string(), count.clone());
+    }
+    if let Some(size) = map.get("size") {
+        uniforms.insert("instance_size".to_string(), size.clone());
+    }
+}
+
 fn shader_candidates(shader: &str, ext: &str) -> Vec<String> {
     let s = shader.trim();
     if s.is_empty() {
@@ -412,6 +480,20 @@ fn shader_candidates(shader: &str, ext: &str) -> Vec<String> {
         if s.starts_with("effects/") {
             cands.push(format!("{s}/shaders/{s}.{ext}"));
             cands.push(format!("assets/{s}/shaders/{s}.{ext}"));
+        }
+        if let Some(rest) = s.strip_prefix("effects/workshop/") {
+            let mut it = rest.splitn(2, '/');
+            if let (Some(workshop_id), Some(effect_name)) = (it.next(), it.next()) {
+                cands.push(format!(
+                    "shaders/workshop/{workshop_id}/effects/{effect_name}.{ext}"
+                ));
+                cands.push(format!(
+                    "assets/shaders/workshop/{workshop_id}/effects/{effect_name}.{ext}"
+                ));
+                cands.push(format!(
+                    "workshop/{workshop_id}/shaders/effects/{effect_name}.{ext}"
+                ));
+            }
         }
     }
 
@@ -523,7 +605,9 @@ fn combos_to_shader_defines(combos: &Value) -> Vec<String> {
                     if iv != 0 {
                         out.push(format!("{key}={iv}"));
                     }
-                } else if let Some(fv) = n.as_f64() && fv != 0.0 {
+                } else if let Some(fv) = n.as_f64()
+                    && fv != 0.0
+                {
                     out.push(format!("{key}={fv}"));
                 }
             }
@@ -624,7 +708,8 @@ fn resolve_uniform_values(
         let Some(uniform) = material_key_to_uniform(material_key) else {
             continue;
         };
-        out.entry(uniform.to_string()).or_insert_with(|| value.clone());
+        out.entry(uniform.to_string())
+            .or_insert_with(|| value.clone());
     }
 
     for (material_key, bound) in &user_bindings {
@@ -645,16 +730,30 @@ fn resolve_uniform_values(
         let Some(uniform) = material_key_to_uniform(script_key) else {
             continue;
         };
-        out.entry(uniform.to_string()).or_insert_with(|| value.clone());
+        out.entry(uniform.to_string())
+            .or_insert_with(|| value.clone());
     }
 
     out
 }
 
+fn merge_pass_overrides(base_pass: &Value, override_pass: Option<&Value>) -> Value {
+    let mut out = base_pass.as_object().cloned().unwrap_or_default();
+    if let Some(ov) = override_pass.and_then(|v| v.as_object()) {
+        for (k, v) in ov {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    Value::Object(out)
+}
+
 pub fn build_scene_gpu_graph(root: &Path) -> Result<SceneGpuGraph> {
     let resolver = AssetResolver::new(root)?;
 
-    let Some(scene_asset) = resolver.resolve("scene.json").or_else(|| resolver.resolve("gifscene.json")) else {
+    let Some(scene_asset) = resolver
+        .resolve("scene.json")
+        .or_else(|| resolver.resolve("gifscene.json"))
+    else {
         bail!("No scene.json/gifscene.json found in {}", root.display());
     };
 
@@ -678,7 +777,7 @@ pub fn build_scene_gpu_graph(root: &Path) -> Result<SceneGpuGraph> {
 
     let mut effect_nodes = Vec::<GpuEffectNode>::new();
     if let Some(objects) = scene_json.get("objects").and_then(|v| v.as_array()) {
-        for object in objects {
+        for (object_index, object) in objects.iter().enumerate() {
             let object_id = object.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
             let object_name = object
                 .get("name")
@@ -686,21 +785,28 @@ pub fn build_scene_gpu_graph(root: &Path) -> Result<SceneGpuGraph> {
                 .unwrap_or_default()
                 .to_string();
 
-            let (object_kind, object_asset_ref) = if let Some(image) = object.get("image").and_then(|v| v.as_str()) {
-                ("image".to_string(), image.to_string())
-            } else if let Some(particle) = object.get("particle").and_then(|v| v.as_str()) {
-                ("particle".to_string(), particle.to_string())
-            } else {
-                continue;
-            };
+            let (object_kind, object_asset_ref) =
+                if let Some(image) = object.get("image").and_then(|v| v.as_str()) {
+                    ("image".to_string(), image.to_string())
+                } else if let Some(particle) = object.get("particle").and_then(|v| v.as_str()) {
+                    ("particle".to_string(), particle.to_string())
+                } else {
+                    continue;
+                };
             let object_origin = object.get("origin").and_then(parse_vec3);
             let object_scale = object.get("scale").and_then(parse_vec3);
             let object_angles = object.get("angles").and_then(parse_vec3);
             let object_size = object.get("size").and_then(parse_vec2);
             let object_parallax_depth = object.get("parallaxDepth").and_then(parse_vec2);
             let object_visible = parse_object_visible(object.get("visible"), &user_values);
+            let instance_override = object
+                .get("instanceoverride")
+                .map(|v| resolve_user_bound_value(v, &user_values))
+                .unwrap_or(Value::Null);
 
-            let Some((object_data, object_asset_resolved)) = parse_json_asset(&resolver, &object_asset_ref) else {
+            let Some((object_data, object_asset_resolved)) =
+                parse_json_asset(&resolver, &object_asset_ref)
+            else {
                 notes.push(format!(
                     "Object '{}' references missing asset: {}",
                     object_name, object_asset_ref
@@ -721,7 +827,9 @@ pub fn build_scene_gpu_graph(root: &Path) -> Result<SceneGpuGraph> {
                 continue;
             };
 
-            let Some((material_data, material_asset_resolved)) = parse_json_asset(&resolver, &material_ref) else {
+            let Some((material_data, material_asset_resolved)) =
+                parse_json_asset(&resolver, &material_ref)
+            else {
                 notes.push(format!(
                     "Object '{}' material not found: {}",
                     object_name, material_ref
@@ -736,118 +844,218 @@ pub fn build_scene_gpu_graph(root: &Path) -> Result<SceneGpuGraph> {
                 ));
                 continue;
             };
+            let mut pipeline_pass_index = 0usize;
 
-            for (pass_idx, pass) in passes.iter().enumerate() {
-                let shader_name = pass
-                    .get("shader")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
+            let mut push_material_passes =
+                |passes_data: &[Value],
+                 material_asset_resolved: &str,
+                 effect_file: &str,
+                 effect_name: &str,
+                 effect_index: Option<usize>| {
+                    for pass in passes_data {
+                        let shader_name = pass
+                            .get("shader")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
 
-                let shader_vert = resolver
-                    .resolve_first(&shader_candidates(&shader_name, "vert"))
-                    .map(|a| a.resolved_path);
-                let shader_frag = resolver
-                    .resolve_first(&shader_candidates(&shader_name, "frag"))
-                    .map(|a| a.resolved_path);
+                        let shader_vert = resolver
+                            .resolve_first(&shader_candidates(&shader_name, "vert"))
+                            .map(|a| a.resolved_path);
+                        let shader_frag = resolver
+                            .resolve_first(&shader_candidates(&shader_name, "frag"))
+                            .map(|a| a.resolved_path);
 
-                let texture_refs = pass
-                    .get("textures")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                        let texture_refs = pass
+                            .get("textures")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
 
-                let mut textures = Vec::<String>::new();
-                for tex in &texture_refs {
-                    let resolved = resolver
-                        .resolve_first(&texture_candidates(tex))
-                        .map(|a| a.resolved_path)
-                        .unwrap_or_else(|| tex.to_string());
-                    textures.push(resolved);
-                }
+                        let mut textures = Vec::<String>::new();
+                        for tex in &texture_refs {
+                            let resolved = resolver
+                                .resolve_first(&texture_candidates(tex))
+                                .map(|a| a.resolved_path)
+                                .unwrap_or_else(|| tex.to_string());
+                            textures.push(resolved);
+                        }
 
-                let mut uniform_bindings = Vec::<ShaderUniformBinding>::new();
-                if let Some(v) = &shader_vert
-                    && let Some(asset) = resolver.resolve(v)
-                    && let Ok(src) = String::from_utf8(asset.bytes)
-                {
-                    uniform_bindings.extend(parse_uniform_meta_from_shader(&src, "vert"));
-                }
-                if let Some(v) = &shader_frag
-                    && let Some(asset) = resolver.resolve(v)
-                    && let Ok(src) = String::from_utf8(asset.bytes)
-                {
-                    uniform_bindings.extend(parse_uniform_meta_from_shader(&src, "frag"));
-                }
+                        let mut uniform_bindings = Vec::<ShaderUniformBinding>::new();
+                        if let Some(v) = &shader_vert
+                            && let Some(asset) = resolver.resolve(v)
+                            && let Ok(src) = String::from_utf8(asset.bytes)
+                        {
+                            uniform_bindings.extend(parse_uniform_meta_from_shader(&src, "vert"));
+                        }
+                        if let Some(v) = &shader_frag
+                            && let Some(asset) = resolver.resolve(v)
+                            && let Ok(src) = String::from_utf8(asset.bytes)
+                        {
+                            uniform_bindings.extend(parse_uniform_meta_from_shader(&src, "frag"));
+                        }
 
-                let pass_spec = GpuPassSpec {
-                    pass_index: pass_idx,
-                    shader: shader_name.clone(),
-                    combos: pass.get("combos").cloned().unwrap_or(Value::Null),
-                    shader_defines: combos_to_shader_defines(
-                        &pass.get("combos").cloned().unwrap_or(Value::Null),
-                    ),
-                    blending: pass
-                        .get("blending")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    depth_test: pass
-                        .get("depthtest")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    depth_write: pass
-                        .get("depthwrite")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    cull_mode: pass
-                        .get("cullmode")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    constant_shader_values: pass
-                        .get("constantshadervalues")
-                        .cloned()
-                        .unwrap_or(Value::Null),
-                    user_shader_values: pass
-                        .get("usershadervalues")
-                        .cloned()
-                        .unwrap_or(Value::Null),
-                    textures,
-                    texture_refs,
-                    effective_uniforms: resolve_uniform_values(
-                        pass,
-                        &uniform_bindings,
-                        &user_values,
-                        &script_values,
-                    ),
+                        let mut effective_uniforms = resolve_uniform_values(
+                            pass,
+                            &uniform_bindings,
+                            &user_values,
+                            &script_values,
+                        );
+                        apply_instance_override_uniforms(
+                            &mut effective_uniforms,
+                            &instance_override,
+                        );
+
+                        let pass_spec = GpuPassSpec {
+                            pass_index: pipeline_pass_index,
+                            shader: shader_name.clone(),
+                            combos: pass.get("combos").cloned().unwrap_or(Value::Null),
+                            shader_defines: combos_to_shader_defines(
+                                &pass.get("combos").cloned().unwrap_or(Value::Null),
+                            ),
+                            blending: pass
+                                .get("blending")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            depth_test: pass
+                                .get("depthtest")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            depth_write: pass
+                                .get("depthwrite")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            cull_mode: pass
+                                .get("cullmode")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            constant_shader_values: pass
+                                .get("constantshadervalues")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            user_shader_values: pass
+                                .get("usershadervalues")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            textures,
+                            texture_refs,
+                            effective_uniforms,
+                        };
+
+                        effect_nodes.push(GpuEffectNode {
+                            object_index,
+                            object_id,
+                            object_name: object_name.clone(),
+                            object_kind: object_kind.clone(),
+                            object_asset: Some(object_asset_resolved.clone()),
+                            object_origin,
+                            object_scale,
+                            object_angles,
+                            object_size,
+                            object_asset_size,
+                            object_parallax_depth,
+                            object_visible,
+                            effect_index,
+                            instance_override: instance_override.clone(),
+                            effect_file: effect_file.to_string(),
+                            effect_name: effect_name.to_string(),
+                            material_asset: Some(material_asset_resolved.to_string()),
+                            pass_shader: shader_name.clone(),
+                            pass_index: pipeline_pass_index,
+                            passes: vec![pass_spec],
+                            shader_vert,
+                            shader_frag,
+                            material_json: Some(material_asset_resolved.to_string()),
+                            uniform_bindings,
+                        });
+                        pipeline_pass_index += 1;
+                    }
                 };
 
-                effect_nodes.push(GpuEffectNode {
-                    object_id,
-                    object_name: object_name.clone(),
-                    object_kind: object_kind.clone(),
-                    object_asset: Some(object_asset_resolved.clone()),
-                    object_origin,
-                    object_scale,
-                    object_angles,
-                    object_size,
-                    object_asset_size,
-                    object_parallax_depth,
-                    object_visible,
-                    effect_file: material_asset_resolved.clone(),
-                    effect_name: shader_name.clone(),
-                    material_asset: Some(material_asset_resolved.clone()),
-                    pass_shader: shader_name,
-                    pass_index: pass_idx,
-                    passes: vec![pass_spec],
-                    shader_vert,
-                    shader_frag,
-                    material_json: Some(material_asset_resolved.clone()),
-                    uniform_bindings,
-                });
+            let base_pass_values = passes.to_vec();
+            push_material_passes(
+                &base_pass_values,
+                &material_asset_resolved,
+                &material_asset_resolved,
+                "base-material",
+                None,
+            );
+
+            if let Some(object_effects) = object.get("effects").and_then(|v| v.as_array()) {
+                for (effect_idx, effect) in object_effects.iter().enumerate() {
+                    if effect.get("visible").and_then(|v| v.as_bool()) == Some(false) {
+                        continue;
+                    }
+                    let Some(effect_file_ref) = effect.get("file").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let Some((effect_data, effect_file_resolved)) =
+                        parse_json_asset(&resolver, effect_file_ref)
+                    else {
+                        notes.push(format!(
+                            "Object '{}' effect not found: {}",
+                            object_name, effect_file_ref
+                        ));
+                        continue;
+                    };
+                    let Some(effect_passes) = effect_data.get("passes").and_then(|v| v.as_array())
+                    else {
+                        continue;
+                    };
+                    let effect_overrides = effect
+                        .get("passes")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+
+                    for (effect_pass_idx, effect_pass) in effect_passes.iter().enumerate() {
+                        let Some(effect_material_ref) =
+                            effect_pass.get("material").and_then(|v| v.as_str())
+                        else {
+                            continue;
+                        };
+                        let Some((effect_material_data, effect_material_resolved)) =
+                            parse_json_asset(&resolver, effect_material_ref)
+                        else {
+                            notes.push(format!(
+                                "Object '{}' effect material not found: {}",
+                                object_name, effect_material_ref
+                            ));
+                            continue;
+                        };
+                        let Some(effect_material_passes) = effect_material_data
+                            .get("passes")
+                            .and_then(|v| v.as_array())
+                        else {
+                            continue;
+                        };
+
+                        let merged = effect_material_passes
+                            .iter()
+                            .enumerate()
+                            .map(|(mat_idx, base_pass)| {
+                                let ov = effect_overrides
+                                    .get(effect_pass_idx + mat_idx)
+                                    .or_else(|| effect_overrides.get(mat_idx));
+                                merge_pass_overrides(base_pass, ov)
+                            })
+                            .collect::<Vec<_>>();
+
+                        let effect_name =
+                            effect_file_resolved.rsplit('/').nth(1).unwrap_or("effect");
+                        push_material_passes(
+                            &merged,
+                            &effect_material_resolved,
+                            &effect_file_resolved,
+                            effect_name,
+                            Some(effect_idx),
+                        );
+                    }
+                }
             }
         }
     }
@@ -909,14 +1117,23 @@ mod tests {
             Some(true)
         );
         assert_eq!(eval_visible_condition("!enabled", None, &users), Some(true));
-        assert_eq!(eval_visible_condition("!(enabled || style.value=='1')", None, &users), Some(true));
+        assert_eq!(
+            eval_visible_condition("!(enabled || style.value=='1')", None, &users),
+            Some(true)
+        );
     }
 
     #[test]
     fn visible_condition_supports_string_helpers() {
         let mut users = BTreeMap::<String, Value>::new();
-        users.insert("style".to_string(), Value::String("classic_dark".to_string()));
-        users.insert("asset".to_string(), Value::String("bg_layer.png".to_string()));
+        users.insert(
+            "style".to_string(),
+            Value::String("classic_dark".to_string()),
+        );
+        users.insert(
+            "asset".to_string(),
+            Value::String("bg_layer.png".to_string()),
+        );
 
         assert_eq!(
             eval_visible_condition("style.value.contains('dark')", None, &users),
@@ -944,7 +1161,10 @@ mod tests {
             }
         });
         let mut users = BTreeMap::<String, Value>::new();
-        users.insert("schemecolor".to_string(), Value::String("1 0 0".to_string()));
+        users.insert(
+            "schemecolor".to_string(),
+            Value::String("1 0 0".to_string()),
+        );
 
         let uniforms = resolve_uniform_values(&pass, &[], &users, &BTreeMap::new());
         assert_eq!(uniforms.get("g_UserAlpha"), Some(&Value::from(0.4)));
@@ -953,5 +1173,39 @@ mod tests {
             uniforms.get("g_Color1"),
             Some(&Value::String("1 0 0".to_string()))
         );
+    }
+
+    #[test]
+    fn shader_candidates_include_workshop_convention() {
+        let cands = shader_candidates("effects/workshop/123456/scroll", "vert");
+        assert!(
+            cands
+                .iter()
+                .any(|c| c.contains("shaders/workshop/123456/effects/scroll.vert"))
+        );
+    }
+
+    #[test]
+    fn merge_pass_overrides_applies_object_effect_overrides() {
+        let base = serde_json::json!({
+            "shader": "effects/scroll",
+            "textures": ["a"],
+            "combos": { "X": 1 }
+        });
+        let ov = serde_json::json!({
+            "textures": [null, "util/noise"],
+            "constantshadervalues": { "strength": 0.5 }
+        });
+        let merged = merge_pass_overrides(&base, Some(&ov));
+        let textures = merged
+            .get("textures")
+            .and_then(|v| v.as_array())
+            .expect("textures");
+        assert_eq!(textures.len(), 2);
+        assert_eq!(
+            merged.get("shader"),
+            Some(&Value::String("effects/scroll".to_string()))
+        );
+        assert!(merged.get("constantshadervalues").is_some());
     }
 }

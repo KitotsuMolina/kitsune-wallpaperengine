@@ -31,6 +31,19 @@ Replicar progresivamente el flujo de Wallpaper Engine (Windows) con un motor pro
 
 ## Comandos principales
 
+## Variables de entorno (Linux/Arch)
+
+```bash
+# Instalacion de Wallpaper Engine en Steam (opcional pero recomendado)
+export KWE_WE_ROOT="$HOME/.local/share/Steam/steamapps/common/wallpaper_engine"
+
+# Ruta directa a assets globales (opcional)
+export KWE_ASSETS_ROOT="$KWE_WE_ROOT/assets"
+
+# Ruta workshop content para appid 431960 (opcional)
+export KWE_WE_WORKSHOP_ROOT="$HOME/.local/share/Steam/steamapps/workshop/content/431960"
+```
+
 ### Ejecucion de wallpaper
 
 ```bash

@@ -72,7 +72,8 @@ fn collect_project_defaults(project_json: &Value, out: &mut BTreeMap<String, Val
         let Some(default) = prop.get("value") else {
             continue;
         };
-        out.entry(name.to_string()).or_insert_with(|| default.clone());
+        out.entry(name.to_string())
+            .or_insert_with(|| default.clone());
     }
 }
 
@@ -102,25 +103,29 @@ fn value_from_f64(v: f64) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn eval_expression(expr: &str, user_values: &BTreeMap<String, Value>) -> Option<(Option<String>, Value)> {
+fn eval_expression(
+    expr: &str,
+    user_values: &BTreeMap<String, Value>,
+) -> Option<(Option<String>, Value)> {
     let clean = expr.trim();
     if clean.is_empty() {
         return None;
     }
 
-    let (depends_on_user, mut current_value, mut rest) = if let Some(idx) = clean.find("changedUserProperties.") {
-        let after = &clean[(idx + "changedUserProperties.".len())..];
-        let user_key = parse_identifier(after)?;
-        let base = user_values.get(&user_key)?.clone();
-        let consumed = idx + "changedUserProperties.".len() + user_key.len();
-        (Some(user_key), base, clean[consumed..].trim())
-    } else if let Some(num) = parse_number(clean) {
-        (None, value_from_f64(num), "")
-    } else if clean.eq_ignore_ascii_case("true") || clean.eq_ignore_ascii_case("false") {
-        (None, Value::Bool(clean.eq_ignore_ascii_case("true")), "")
-    } else {
-        return None;
-    };
+    let (depends_on_user, mut current_value, mut rest) =
+        if let Some(idx) = clean.find("changedUserProperties.") {
+            let after = &clean[(idx + "changedUserProperties.".len())..];
+            let user_key = parse_identifier(after)?;
+            let base = user_values.get(&user_key)?.clone();
+            let consumed = idx + "changedUserProperties.".len() + user_key.len();
+            (Some(user_key), base, clean[consumed..].trim())
+        } else if let Some(num) = parse_number(clean) {
+            (None, value_from_f64(num), "")
+        } else if clean.eq_ignore_ascii_case("true") || clean.eq_ignore_ascii_case("false") {
+            (None, Value::Bool(clean.eq_ignore_ascii_case("true")), "")
+        } else {
+            return None;
+        };
 
     while !rest.is_empty() {
         let op = rest.chars().next()?;
@@ -159,7 +164,11 @@ fn eval_expression(expr: &str, user_values: &BTreeMap<String, Value>) -> Option<
     Some((depends_on_user, current_value))
 }
 
-fn parse_script_assignments(script: &str, source_path: &str, user_values: &BTreeMap<String, Value>) -> Vec<ScriptAssignment> {
+fn parse_script_assignments(
+    script: &str,
+    source_path: &str,
+    user_values: &BTreeMap<String, Value>,
+) -> Vec<ScriptAssignment> {
     let mut out = Vec::<ScriptAssignment>::new();
 
     for stmt in script.split(';') {
@@ -251,7 +260,10 @@ pub fn apply_scene_scripts(
 
     let mut notes = Vec::<String>::new();
     if !assignments.is_empty() {
-        let resolved = assignments.iter().filter(|a| a.resolved_value.is_some()).count();
+        let resolved = assignments
+            .iter()
+            .filter(|a| a.resolved_value.is_some())
+            .count();
         notes.push(format!(
             "Script runtime (minimal) evaluated {resolved}/{} assignments",
             assignments.len()

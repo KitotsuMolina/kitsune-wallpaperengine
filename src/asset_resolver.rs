@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 pub enum AssetSourceKind {
     Package,
     WallpaperDir,
+    Workshop,
     GlobalAssets,
 }
 
@@ -22,6 +23,7 @@ pub struct ResolvedAsset {
 pub struct AssetResolver {
     root: PathBuf,
     pkg: Option<ScenePkg>,
+    workshop_root: Option<PathBuf>,
     global_assets_root: Option<PathBuf>,
 }
 
@@ -78,6 +80,57 @@ fn find_global_assets_root(root: &Path) -> Option<PathBuf> {
     }
 
     candidates.into_iter().find(|p| p.is_dir())
+}
+
+fn find_workshop_root() -> Option<PathBuf> {
+    if let Ok(v) = std::env::var("KWE_WE_WORKSHOP_ROOT") {
+        let p = PathBuf::from(v);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    for steam_root in steam_roots() {
+        let direct = steam_root.join("steamapps/workshop/content/431960");
+        if direct.is_dir() {
+            return Some(direct);
+        }
+
+        let vdf = steam_root.join("steamapps/libraryfolders.vdf");
+        for library in parse_libraryfolders_vdf(&vdf) {
+            let p = library.join("steamapps/workshop/content/431960");
+            if p.is_dir() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn workshop_candidates(rel: &str, workshop_root: &Path) -> Vec<PathBuf> {
+    let parts = rel.split('/').collect::<Vec<_>>();
+    if parts.len() < 4 {
+        return Vec::new();
+    }
+    let kind = parts[0];
+    if !matches!(kind, "effects" | "materials" | "shaders") {
+        return Vec::new();
+    }
+    if parts[1] != "workshop" {
+        return Vec::new();
+    }
+    let workshop_id = parts[2];
+    if workshop_id.is_empty() {
+        return Vec::new();
+    }
+    let tail = parts[3..].join("/");
+    if tail.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        workshop_root.join(workshop_id).join(kind).join(&tail),
+        workshop_root.join(workshop_id).join(&tail),
+    ]
 }
 
 fn user_home_dir() -> Option<PathBuf> {
@@ -143,8 +196,7 @@ fn parse_libraryfolders_vdf(vdf_path: &Path) -> Vec<PathBuf> {
 }
 
 fn wallpaper_engine_assets_in_library(library_root: &Path) -> Option<PathBuf> {
-    let p = library_root
-        .join("steamapps/common/wallpaper_engine/assets");
+    let p = library_root.join("steamapps/common/wallpaper_engine/assets");
     if p.is_dir() { Some(p) } else { None }
 }
 
@@ -181,6 +233,7 @@ impl AssetResolver {
         Ok(Self {
             root: root.to_path_buf(),
             pkg,
+            workshop_root: find_workshop_root(),
             global_assets_root: find_global_assets_root(root),
         })
     }
@@ -233,6 +286,23 @@ impl AssetResolver {
             });
         }
 
+        if let Some(workshop_root) = &self.workshop_root {
+            for candidate in workshop_candidates(&rel, workshop_root) {
+                if !candidate.is_file() {
+                    continue;
+                }
+                if let Ok(bytes) = fs::read(&candidate) {
+                    let resolved = candidate.to_string_lossy().replace('\\', "/");
+                    return Some(ResolvedAsset {
+                        request_path: rel.clone(),
+                        resolved_path: resolved,
+                        source: AssetSourceKind::Workshop,
+                        bytes,
+                    });
+                }
+            }
+        }
+
         if let Some(global_root) = &self.global_assets_root {
             let mut global_candidates = Vec::<PathBuf>::new();
             global_candidates.push(global_root.join(&rel));
@@ -270,8 +340,14 @@ mod tests {
 
     #[test]
     fn normalize_path_works() {
-        assert_eq!(normalize_rel_path("./a/b/../c.json").as_deref(), Some("a/c.json"));
-        assert_eq!(normalize_rel_path("\\materials\\x.tex").as_deref(), Some("materials/x.tex"));
+        assert_eq!(
+            normalize_rel_path("./a/b/../c.json").as_deref(),
+            Some("a/c.json")
+        );
+        assert_eq!(
+            normalize_rel_path("\\materials\\x.tex").as_deref(),
+            Some("materials/x.tex")
+        );
         assert!(normalize_rel_path("  ").is_none());
     }
 
@@ -294,7 +370,13 @@ mod tests {
         fs::write(&tmp, content).expect("write vdf");
         let got = parse_libraryfolders_vdf(&tmp);
         let _ = fs::remove_file(&tmp);
-        assert!(got.iter().any(|p| p.to_string_lossy().contains(".local/share/Steam")));
-        assert!(got.iter().any(|p| p.to_string_lossy().contains("/mnt/games/SteamLibrary")));
+        assert!(
+            got.iter()
+                .any(|p| p.to_string_lossy().contains(".local/share/Steam"))
+        );
+        assert!(
+            got.iter()
+                .any(|p| p.to_string_lossy().contains("/mnt/games/SteamLibrary"))
+        );
     }
 }

@@ -52,14 +52,21 @@ fn lower_ext(path: &str) -> String {
         .unwrap_or_default()
 }
 
-fn blend(dst: &mut Rgba<u8>, src: Rgba<u8>, alpha: f32, mode: &str, brightness: f32, tint: [f32; 3]) {
+fn blend(
+    dst: &mut Rgba<u8>,
+    src: Rgba<u8>,
+    alpha: f32,
+    mode: &str,
+    brightness: f32,
+    tint: [f32; 3],
+) {
     let mut src_tinted = src;
-    src_tinted[0] = ((src_tinted[0] as f32) * brightness * tint[0].clamp(0.0, 2.0))
-        .clamp(0.0, 255.0) as u8;
-    src_tinted[1] = ((src_tinted[1] as f32) * brightness * tint[1].clamp(0.0, 2.0))
-        .clamp(0.0, 255.0) as u8;
-    src_tinted[2] = ((src_tinted[2] as f32) * brightness * tint[2].clamp(0.0, 2.0))
-        .clamp(0.0, 255.0) as u8;
+    src_tinted[0] =
+        ((src_tinted[0] as f32) * brightness * tint[0].clamp(0.0, 2.0)).clamp(0.0, 255.0) as u8;
+    src_tinted[1] =
+        ((src_tinted[1] as f32) * brightness * tint[1].clamp(0.0, 2.0)).clamp(0.0, 255.0) as u8;
+    src_tinted[2] =
+        ((src_tinted[2] as f32) * brightness * tint[2].clamp(0.0, 2.0)).clamp(0.0, 255.0) as u8;
     let a = (src_tinted[3] as f32 / 255.0) * alpha.clamp(0.0, 1.0);
     if a <= 0.0 {
         return;
@@ -92,7 +99,7 @@ fn blend(dst: &mut Rgba<u8>, src: Rgba<u8>, alpha: f32, mode: &str, brightness: 
     }
 }
 
-fn decode_layer_png(bytes: &[u8]) -> Option<RgbaImage> {
+fn decode_layer_image(bytes: &[u8]) -> Option<RgbaImage> {
     let dyn_img = image::load_from_memory(bytes).ok()?;
     Some(dyn_img.to_rgba8())
 }
@@ -108,7 +115,7 @@ fn resolve_layer_image(
     };
 
     let ext = lower_ext(&asset.resolved_path);
-    if ext == "png" {
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
         return Ok(Some(asset.bytes));
     }
 
@@ -133,18 +140,21 @@ fn resolve_layer_image(
             .extension()
             .map(|v| v.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        if proxy_ext != "png" {
+        if !matches!(proxy_ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
             return Ok(None);
         }
-        let png = fs::read(&proxy_path)
+        let img = fs::read(&proxy_path)
             .with_context(|| format!("Failed reading {}", proxy_path.display()))?;
-        return Ok(Some(png));
+        return Ok(Some(img));
     }
 
     Ok(None)
 }
 
-fn layer_motion(uniforms: &std::collections::BTreeMap<String, serde_json::Value>, idx: usize) -> (f32, f32, f32, f32) {
+fn layer_motion(
+    uniforms: &std::collections::BTreeMap<String, serde_json::Value>,
+    idx: usize,
+) -> (f32, f32, f32, f32) {
     let sx = uniforms
         .get("g_ScrollX")
         .and_then(|v| v.as_f64())
@@ -180,7 +190,8 @@ pub fn render_native_static_frame(
 
     let resolver = AssetResolver::new(root)?;
     let out_dir = session_dir.join("native-render");
-    fs::create_dir_all(&out_dir).with_context(|| format!("Failed creating {}", out_dir.display()))?;
+    fs::create_dir_all(&out_dir)
+        .with_context(|| format!("Failed creating {}", out_dir.display()))?;
     let scratch = out_dir.join("scratch");
 
     let width = canvas_width.max(1);
@@ -204,13 +215,16 @@ pub fn render_native_static_frame(
 
         let bytes = resolve_layer_image(&resolver, &texture_ref, &scratch)?;
         let Some(bytes) = bytes else {
-            record.reason = Some("texture unresolved or unsupported format (expects png/tex->png)".to_string());
+            record.reason = Some(
+                "texture unresolved or unsupported format (expects png/jpg/webp or tex proxy)"
+                    .to_string(),
+            );
             results.push(record);
             continue;
         };
 
-        let Some(img) = decode_layer_png(&bytes) else {
-            record.reason = Some("failed to decode image bytes as PNG".to_string());
+        let Some(img) = decode_layer_image(&bytes) else {
+            record.reason = Some("failed to decode image bytes".to_string());
             results.push(record);
             continue;
         };
@@ -263,7 +277,7 @@ pub fn render_native_static_frame(
         layers: results,
         notes: vec![
             "Native static compositor built from ready draw layers".to_string(),
-            "Current renderer supports png and tex->png layers".to_string(),
+            "Current renderer supports png/jpg/webp and tex proxies".to_string(),
         ],
     };
 
@@ -296,9 +310,11 @@ pub fn render_native_animated_proxy(
 
     let resolver = AssetResolver::new(root)?;
     let out_dir = session_dir.join("native-render");
-    fs::create_dir_all(&out_dir).with_context(|| format!("Failed creating {}", out_dir.display()))?;
+    fs::create_dir_all(&out_dir)
+        .with_context(|| format!("Failed creating {}", out_dir.display()))?;
     let scratch = out_dir.join("scratch-animated");
-    fs::create_dir_all(&scratch).with_context(|| format!("Failed creating {}", scratch.display()))?;
+    fs::create_dir_all(&scratch)
+        .with_context(|| format!("Failed creating {}", scratch.display()))?;
 
     let width = canvas_width.max(1);
     let height = canvas_height.max(1);
@@ -322,13 +338,16 @@ pub fn render_native_animated_proxy(
 
         let bytes = resolve_layer_image(&resolver, &texture_ref, &scratch)?;
         let Some(bytes) = bytes else {
-            record.reason = Some("texture unresolved or unsupported format (expects png/tex->png)".to_string());
+            record.reason = Some(
+                "texture unresolved or unsupported format (expects png/jpg/webp or tex proxy)"
+                    .to_string(),
+            );
             rendered.push(record);
             continue;
         };
 
-        let Some(img) = decode_layer_png(&bytes) else {
-            record.reason = Some("failed to decode image bytes as PNG".to_string());
+        let Some(img) = decode_layer_image(&bytes) else {
+            record.reason = Some("failed to decode image bytes".to_string());
             rendered.push(record);
             continue;
         };
@@ -398,10 +417,7 @@ pub fn render_native_animated_proxy(
         filter.push_str(&format!("[{}]copy[{}];", moved, next_comp));
         comp_idx += 1;
     }
-    filter.push_str(&format!(
-        "[comp{}]format=yuv420p[v]",
-        comp_idx
-    ));
+    filter.push_str(&format!("[comp{}]format=yuv420p[v]", comp_idx));
 
     if dry_run {
         let mut cmdline = "[dry-run] ffmpeg -hide_banner -loglevel error -y".to_string();
@@ -418,7 +434,10 @@ pub fn render_native_animated_proxy(
         println!("{}", cmdline);
     } else {
         let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-hide_banner").arg("-loglevel").arg("error").arg("-y");
+        cmd.arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-y");
         for p in &input_pngs {
             cmd.arg("-loop").arg("1").arg("-i").arg(p);
         }

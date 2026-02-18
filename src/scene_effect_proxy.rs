@@ -1,6 +1,6 @@
-use crate::scene_pkg::{extract_entry_to_cache, find_entry, parse_scene_pkg, read_entry_bytes};
 use crate::scene_gpu_graph::{SceneGpuGraph, build_scene_gpu_graph};
 use crate::scene_native_runtime::{NativeSupportTier, build_native_runtime_plan};
+use crate::scene_pkg::{extract_entry_to_cache, find_entry, parse_scene_pkg, read_entry_bytes};
 use crate::tex_payload::extract_playable_proxy_from_tex;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -150,11 +150,19 @@ fn visual_tuning_from_graph(graph: &SceneGpuGraph) -> VisualTuning {
 
     for node in &graph.effect_nodes {
         for pass in &node.passes {
-            if let Some(v) = pass.effective_uniforms.get("g_ScrollX").and_then(parse_f32_value) {
+            if let Some(v) = pass
+                .effective_uniforms
+                .get("g_ScrollX")
+                .and_then(parse_f32_value)
+            {
                 scroll_x += v.abs();
                 found_scroll = true;
             }
-            if let Some(v) = pass.effective_uniforms.get("g_ScrollY").and_then(parse_f32_value) {
+            if let Some(v) = pass
+                .effective_uniforms
+                .get("g_ScrollY")
+                .and_then(parse_f32_value)
+            {
                 scroll_y += v.abs();
                 found_scroll = true;
             }
@@ -165,7 +173,11 @@ fn visual_tuning_from_graph(graph: &SceneGpuGraph) -> VisualTuning {
             {
                 bright = (bright + v).max(0.01);
             }
-            if let Some(v) = pass.effective_uniforms.get("g_Power").and_then(parse_f32_value) {
+            if let Some(v) = pass
+                .effective_uniforms
+                .get("g_Power")
+                .and_then(parse_f32_value)
+            {
                 power = (power + v).max(0.01);
             }
             if let Some(v) = pass
@@ -264,10 +276,7 @@ fn collect_effect_layer_refs_from_native_plan(
             continue;
         }
 
-        let profile = infer_motion_profile(&format!(
-            "{} {}",
-            layer.shader_family, layer.shader
-        ));
+        let profile = infer_motion_profile(&format!("{} {}", layer.shader_family, layer.shader));
         out.push(EffectLayerRef {
             texture_ref,
             profile,
@@ -318,7 +327,12 @@ fn find_tex_entry_for_texture_ref(
     candidates.into_iter().next()
 }
 
-fn filter_for_profile(profile: MotionProfile, src: &str, out: &str, tuning: &VisualTuning) -> String {
+fn filter_for_profile(
+    profile: MotionProfile,
+    src: &str,
+    out: &str,
+    tuning: &VisualTuning,
+) -> String {
     match profile {
         MotionProfile::Iris => format!(
             "[{src}]crop=iw-10:ih-10:x='5+sin(t*2.9)*{:.3}':y='5+cos(t*2.5)*{:.3}',pad=iw+10:ih+10:5:5:color=black@0[{out}]",
@@ -341,10 +355,7 @@ fn filter_for_profile(profile: MotionProfile, src: &str, out: &str, tuning: &Vis
         ),
         MotionProfile::Drift => format!(
             "[{src}]crop=iw-8:ih-8:x='4+sin(t*{:.3})*{:.3}':y='4+cos(t*{:.3})*{:.3}',pad=iw+8:ih+8:4:4:color=black@0[{out}]",
-            tuning.drift_freq_x,
-            tuning.drift_amp_x,
-            tuning.drift_freq_y,
-            tuning.drift_amp_y
+            tuning.drift_freq_x, tuning.drift_amp_x, tuning.drift_freq_y, tuning.drift_amp_y
         ),
     }
 }
@@ -380,7 +391,11 @@ fn parse_scene_size(scene_json: &Value) -> (u32, u32) {
     (scene_w.max(1), scene_h.max(1))
 }
 
-fn detect_audio_bars_overlay(scene_json: &Value, scene_w: u32, scene_h: u32) -> Option<AudioBarsOverlay> {
+fn detect_audio_bars_overlay(
+    scene_json: &Value,
+    scene_w: u32,
+    scene_h: u32,
+) -> Option<AudioBarsOverlay> {
     let objects = scene_json.get("objects")?.as_array()?;
     for object in objects {
         let effects = object.get("effects").and_then(|v| v.as_array())?;
@@ -617,7 +632,10 @@ fn build_masked_filter(
             layer_h,
             mask_scaled
         ));
-        filter.push_str(&format!("[{}]format=gray,boxblur=2:1[{}];", mask_scaled, mask));
+        filter.push_str(&format!(
+            "[{}]format=gray,boxblur=2:1[{}];",
+            mask_scaled, mask
+        ));
         if layer.angle_rad.abs() > 0.001 {
             filter.push_str(&format!(
                 "[{}]rotate={:.6}:c=black:ow=rotw(iw):oh=roth(ih)[{}];",
@@ -777,8 +795,7 @@ pub fn build_scene_realtime_effect_plan(
         return Ok(None);
     };
     let pkg = parse_scene_pkg(&pkg_path)?;
-    let scene_entry =
-        find_entry(&pkg, "scene.json").or_else(|| find_entry(&pkg, "gifscene.json"));
+    let scene_entry = find_entry(&pkg, "scene.json").or_else(|| find_entry(&pkg, "gifscene.json"));
     let Some(scene_entry) = scene_entry else {
         return Ok(None);
     };
@@ -839,10 +856,7 @@ pub fn build_scene_realtime_effect_plan(
         if !layers.is_empty() {
             eprintln!(
                 "[ok] native families in realtime plan: {:?}",
-                layers
-                    .iter()
-                    .map(|l| l.family.clone())
-                    .collect::<Vec<_>>()
+                layers.iter().map(|l| l.family.clone()).collect::<Vec<_>>()
             );
         }
         build_masked_filter(&layers, scene_w, scene_h, None, &tuning)
@@ -863,8 +877,7 @@ pub fn build_scene_audio_bars_overlay(root: &Path) -> Result<Option<AudioBarsOve
         return Ok(None);
     };
     let pkg = parse_scene_pkg(&pkg_path)?;
-    let scene_entry =
-        find_entry(&pkg, "scene.json").or_else(|| find_entry(&pkg, "gifscene.json"));
+    let scene_entry = find_entry(&pkg, "scene.json").or_else(|| find_entry(&pkg, "gifscene.json"));
     let Some(scene_entry) = scene_entry else {
         return Ok(None);
     };
@@ -944,8 +957,7 @@ pub fn maybe_build_scene_animated_proxy(
         return Ok(None);
     };
     let pkg = parse_scene_pkg(&pkg_path)?;
-    let scene_entry =
-        find_entry(&pkg, "scene.json").or_else(|| find_entry(&pkg, "gifscene.json"));
+    let scene_entry = find_entry(&pkg, "scene.json").or_else(|| find_entry(&pkg, "gifscene.json"));
     let Some(scene_entry) = scene_entry else {
         return Ok(None);
     };
@@ -998,7 +1010,10 @@ pub fn maybe_build_scene_animated_proxy(
     if layers.is_empty() {
         eprintln!("[warn] scene effect proxy using procedural fallback (no effect masks)");
     } else {
-        eprintln!("[ok] scene effect proxy using {} effect mask layer(s)", layers.len());
+        eprintln!(
+            "[ok] scene effect proxy using {} effect mask layer(s)",
+            layers.len()
+        );
     }
     let built = build_masked_animated_proxy(entry, &layers, scene_w, scene_h, &out_proxy, dry_run)?;
     Ok(Some(built))
@@ -1021,6 +1036,7 @@ mod tests {
             script_properties: Value::Null,
             script_assignments: Vec::new(),
             effect_nodes: vec![GpuEffectNode {
+                object_index: 0,
                 object_id: 1,
                 object_name: "obj".to_string(),
                 object_kind: "image".to_string(),
@@ -1032,6 +1048,8 @@ mod tests {
                 object_asset_size: Some([1920.0, 1080.0]),
                 object_parallax_depth: Some([1.0, 1.0]),
                 object_visible: true,
+                effect_index: None,
+                instance_override: Value::Null,
                 effect_file: "materials/a.json".to_string(),
                 effect_name: "genericimage".to_string(),
                 material_asset: Some("materials/a.json".to_string()),
