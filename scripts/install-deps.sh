@@ -40,7 +40,7 @@ install_arch() {
     rustup
     ffmpeg
     mpvpaper
-    pulseaudio-utils
+    libpulse
     pipewire-pulse
     procps-ng
     pciutils
@@ -97,7 +97,7 @@ case "${ID:-}" in
     install_fedora
     ;;
   *)
-    err "Unsupported distro ID='${ID:-unknown}'. Please install manually: rustup, ffmpeg, mpvpaper/mpv, pulseaudio-utils, pipewire-pulse, procps, pciutils, systemd."
+    err "Unsupported distro ID='${ID:-unknown}'. Please install manually: rustup, ffmpeg, mpvpaper/mpv, libpulse (Arch) or pulseaudio-utils (Debian/Fedora), pipewire-pulse, procps, pciutils, systemd."
     exit 2
     ;;
 esac
@@ -115,7 +115,7 @@ done
 
 if ((${#missing[@]} > 0)); then
   err "Missing binaries after install: ${missing[*]}"
-  err "For Arch, ensure: pacman -S rustup ffmpeg mpvpaper pulseaudio-utils pipewire-pulse procps-ng pciutils"
+  err "For Arch, ensure: pacman -S rustup ffmpeg mpvpaper libpulse pipewire-pulse procps-ng pciutils"
   exit 3
 fi
 
