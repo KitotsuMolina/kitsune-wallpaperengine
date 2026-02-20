@@ -1,8 +1,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PlaybackProfile {
     Performance,
     Balanced,
@@ -39,6 +41,20 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     InstallDependencies,
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
+    StartConfig {
+        #[arg(long, default_value_os_t = default_config_path())]
+        config: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    ServiceAutostart {
+        #[command(subcommand)]
+        command: ServiceAutostartCommands,
+    },
     Inspect {
         wallpaper: String,
         #[arg(long, default_value_os_t = default_downloads_root())]
@@ -250,6 +266,12 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    StartServices {
+        #[arg(long = "service")]
+        services: Vec<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
     Apply {
         wallpaper: String,
         #[arg(long)]
@@ -273,9 +295,105 @@ pub enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    SetVideo {
+        #[arg(long)]
+        monitor: String,
+        #[arg(long)]
+        video: String,
+        #[arg(long, default_value_os_t = default_downloads_root())]
+        downloads_root: PathBuf,
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        keep_services: bool,
+        #[arg(long)]
+        mute_audio: bool,
+        #[arg(long, value_enum, default_value_t = PlaybackProfile::Performance)]
+        profile: PlaybackProfile,
+        #[arg(long)]
+        display_fps: Option<u32>,
+        #[arg(long, default_value_t = true)]
+        seamless_loop: bool,
+        #[arg(long, default_value_t = false)]
+        loop_crossfade: bool,
+        #[arg(long, default_value_t = 0.35)]
+        loop_crossfade_seconds: f32,
+        #[arg(long, default_value_t = true)]
+        optimize: bool,
+        #[arg(long, default_value_t = 2560)]
+        proxy_width: u32,
+        #[arg(long, default_value_t = 30)]
+        proxy_fps: u32,
+        #[arg(long, default_value_t = 24)]
+        proxy_crf: u8,
+        #[arg(long, default_value_os_t = default_config_path())]
+        config: PathBuf,
+    },
+    SetApply {
+        #[arg(long)]
+        monitor: String,
+        #[arg(long)]
+        wallpaper: String,
+        #[arg(long, default_value_os_t = default_downloads_root())]
+        downloads_root: PathBuf,
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        keep_services: bool,
+        #[arg(long)]
+        mute_audio: bool,
+        #[arg(long, value_enum, default_value_t = PlaybackProfile::Balanced)]
+        profile: PlaybackProfile,
+        #[arg(long)]
+        display_fps: Option<u32>,
+        #[arg(long, default_value_t = true)]
+        allow_scene_preview_fallback: bool,
+        #[arg(long, default_value_os_t = default_config_path())]
+        config: PathBuf,
+    },
+    Remove {
+        #[arg(long)]
+        monitor: String,
+        #[arg(long, default_value_os_t = default_config_path())]
+        config: PathBuf,
+    },
+    List {
+        #[arg(long, default_value_os_t = default_config_path())]
+        config: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceAutostartCommands {
+    Install {
+        #[arg(long)]
+        overwrite: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Enable {
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Disable {
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Remove {
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Status,
+}
+
 fn default_downloads_root() -> PathBuf {
     if let Ok(home) = env::var("HOME") {
         return PathBuf::from(home).join(".local/share/kitsune/we/downloads");
     }
     PathBuf::from(".")
+}
+
+fn default_config_path() -> PathBuf {
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home).join(".config/kitsune-livewallpaper/config.json");
+    }
+    PathBuf::from("config.json")
 }
