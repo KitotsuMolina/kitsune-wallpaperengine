@@ -90,10 +90,10 @@ pub fn stop_existing_mpvpaper_for_monitor(monitor: &str, dry_run: bool) -> Resul
         if !cmd.contains(monitor) {
             continue;
         }
-        // Only kill mpvpaper sessions started by kitsune-wallpaperengine.
+        // Only kill mpvpaper sessions started by kitsune-livewallpaper.
         // This avoids killing Kitsune Spectrum (which may run on its own mpvpaper/layer stack).
-        let is_kwe_session = cmd.contains("kitsune-wallpaperengine")
-            || cmd.contains(".cache/kitsune-wallpaperengine")
+        let is_kwe_session = cmd.contains("kitsune-livewallpaper")
+            || cmd.contains(".cache/kitsune-livewallpaper")
             || cmd.contains("render-session")
             || cmd.contains("udp://127.0.0.1:");
         if !is_kwe_session {

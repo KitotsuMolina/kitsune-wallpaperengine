@@ -199,7 +199,7 @@ pub fn extract_entry_to_cache(
 pub fn default_scene_cache_root(workshop_id_or_name: &str) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
-        .join(".cache/kitsune-wallpaperengine/scene")
+        .join(".cache/kitsune-livewallpaper/scene")
         .join(workshop_id_or_name)
 }
 

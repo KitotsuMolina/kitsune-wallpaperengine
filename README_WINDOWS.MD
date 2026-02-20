@@ -1,4 +1,4 @@
-Sí, entiendo la situación y ya revisé tanto tu proyecto (kitsune-wallpaperengine) como la instalación local de
+Sí, entiendo la situación y ya revisé tanto tu proyecto (kitsune-livewallpaper) como la instalación local de
 Wallpaper Engine. Hay una razón clara por la que hoy terminas “wallpaper por wallpaper”: tu motor no está leyendo el
 mismo flujo de datos que el runtime real.
 

@@ -1,4 +1,4 @@
-# kitsune-wallpaperengine
+# kitsune-livewallpaper
 
 Motor propio en Rust para ejecutar wallpapers de Wallpaper Engine en Linux, integrado con Kitowall/Kitsune.
 
@@ -115,7 +115,7 @@ cargo run -- library-roadmap \
 ## Salidas importantes
 
 - `scene-gpu-play` genera sesion en:
-  - `~/.cache/kitsune-wallpaperengine/scene/<id>/render-session/`
+  - `~/.cache/kitsune-livewallpaper/scene/<id>/render-session/`
 - Cuando hay audio bars detectadas:
   - `gpu/audio-bars-overlay.json`
   - `gpu/kitsune-we-audio-overlay.group`
@@ -190,3 +190,6 @@ Si se quiere desactivar auto-aplicacion de overlay a Kitsune en `scene-gpu-play`
 ```
 
 (Disponible para pruebas A/B cuando haga falta aislar problemas de render.)
+
+
+codex resume 019c793f-bfbd-7000-b1c4-ca304df640ad

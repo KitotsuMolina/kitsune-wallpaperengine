@@ -369,7 +369,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kitsune-wallpaperengine"
+name = "kitsune-livewallpaper"
 version = "0.2.0"
 dependencies = [
  "anyhow",

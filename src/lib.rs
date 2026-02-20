@@ -93,9 +93,9 @@ fn find_preview_fallback(root: &std::path::Path) -> Option<std::path::PathBuf> {
 
 fn default_video_live_cache_root() -> std::path::PathBuf {
     if let Ok(home) = std::env::var("HOME") {
-        return std::path::PathBuf::from(home).join(".cache/kitsune-wallpaperengine/video-live");
+        return std::path::PathBuf::from(home).join(".cache/kitsune-livewallpaper/video-live");
     }
-    std::path::PathBuf::from("/tmp/kitsune-wallpaperengine/video-live")
+    std::path::PathBuf::from("/tmp/kitsune-livewallpaper/video-live")
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -749,10 +749,10 @@ Use native scene renderer path and inspect assets with `scene-plan`/`scene-runti
                     );
                 }
                 WallpaperType::Web => {
-                    bail!("Web wallpapers are not implemented yet in kitsune-wallpaperengine MVP")
+                    bail!("Web wallpapers are not implemented yet in kitsune-livewallpaper MVP")
                 }
                 WallpaperType::Application => bail!(
-                    "Application wallpapers are not implemented yet in kitsune-wallpaperengine MVP"
+                    "Application wallpapers are not implemented yet in kitsune-livewallpaper MVP"
                 ),
                 WallpaperType::Unknown => bail!("Unsupported/unknown wallpaper type"),
             }

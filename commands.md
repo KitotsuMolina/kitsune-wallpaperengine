@@ -1,4 +1,4 @@
-# kitsune-wallpaperengine - Commands
+# kitsune-livewallpaper - Commands
 
 Este documento separa:
 - `video-play` como flujo estable/recomendado.
@@ -9,7 +9,7 @@ Este documento separa:
 Uso base:
 
 ```bash
-./target/debug/kitsune-wallpaperengine video-play [OPTIONS] --monitor <MONITOR> <VIDEO>
+./target/debug/kitsune-livewallpaper video-play [OPTIONS] --monitor <MONITOR> <VIDEO>
 ```
 
 ### Opciones disponibles en `video-play`
@@ -35,7 +35,7 @@ Uso base:
 Ejemplo recomendado (buen balance rendimiento/calidad):
 
 ```bash
-./target/debug/kitsune-wallpaperengine video-play /ruta/video.mp4 \
+./target/debug/kitsune-livewallpaper video-play /ruta/video.mp4 \
   --monitor DP-1 \
   --profile performance \
   --seamless-loop \
@@ -48,7 +48,7 @@ Ejemplo recomendado (buen balance rendimiento/calidad):
 Con crossfade:
 
 ```bash
-./target/debug/kitsune-wallpaperengine video-play /ruta/video.mp4 \
+./target/debug/kitsune-livewallpaper video-play /ruta/video.mp4 \
   --monitor DP-1 \
   --profile performance \
   --seamless-loop \
@@ -63,7 +63,7 @@ Con crossfade:
 Sin audio:
 
 ```bash
-./target/debug/kitsune-wallpaperengine video-play /ruta/video.mp4 \
+./target/debug/kitsune-livewallpaper video-play /ruta/video.mp4 \
   --monitor DP-1 \
   --profile performance \
   --mute-audio \
@@ -77,7 +77,7 @@ Sin audio:
 Simulación (sin aplicar cambios):
 
 ```bash
-./target/debug/kitsune-wallpaperengine video-play /ruta/video.mp4 \
+./target/debug/kitsune-livewallpaper video-play /ruta/video.mp4 \
   --monitor DP-1 \
   --profile performance \
   --seamless-loop \
@@ -93,7 +93,7 @@ Simulación (sin aplicar cambios):
 ```bash
 VIDEO="/home/kitotsu/Videos/LiveWallpapers/motionbgs/2b-midnight-bloom/2b-midnight-bloom__4k.mp4"
 hyprctl -j monitors | jq -r '.[].name' | while IFS= read -r m; do
-  ./target/debug/kitsune-wallpaperengine video-play "$VIDEO" \
+  ./target/debug/kitsune-livewallpaper video-play "$VIDEO" \
     --monitor "$m" \
     --profile performance \
     --seamless-loop \
@@ -129,11 +129,11 @@ Los siguientes comandos existen en el binario, pero se consideran de demo/proces
 Ayuda general:
 
 ```bash
-./target/debug/kitsune-wallpaperengine --help
+./target/debug/kitsune-livewallpaper --help
 ```
 
 Ayuda de un subcomando específico (ejemplo):
 
 ```bash
-./target/debug/kitsune-wallpaperengine scene-gpu-play --help
+./target/debug/kitsune-livewallpaper scene-gpu-play --help
 ```

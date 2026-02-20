@@ -29,7 +29,7 @@ pub enum AudioBarsSource {
 }
 
 #[derive(Parser)]
-#[command(name = "kitsune-wallpaperengine")]
+#[command(name = "kitsune-livewallpaper")]
 #[command(about = "Kitsune custom wallpaper engine MVP")]
 pub struct Cli {
     #[command(subcommand)]
