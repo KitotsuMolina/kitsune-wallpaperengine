@@ -1,4 +1,6 @@
 use anyhow::{Context, Result, bail};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 pub mod asset_resolver;
 pub mod audio;
@@ -43,7 +45,7 @@ use scene_text::{
 use services::{default_services, stop_services};
 use tex_payload::extract_playable_proxy_from_tex;
 use types::{SceneDiagnostics, WallpaperType};
-use video_opt::maybe_build_optimized_proxy;
+use video_opt::{maybe_build_loop_crossfade_proxy, maybe_build_optimized_proxy};
 use video_tune::{auto_tune_preset, preset_values};
 use wallpaper::{find_scene_compatible_video, inspect_wallpaper, resolve_wallpaper_path};
 
@@ -87,6 +89,13 @@ fn find_preview_fallback(root: &std::path::Path) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+fn default_video_live_cache_root() -> std::path::PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        return std::path::PathBuf::from(home).join(".cache/kitsune-wallpaperengine/video-live");
+    }
+    std::path::PathBuf::from("/tmp/kitsune-wallpaperengine/video-live")
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -483,6 +492,135 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::AudioProbe { source, seconds } => {
             let out = probe_audio(source, seconds)?;
             println!("{}", serde_json::to_string_pretty(&out)?);
+            Ok(())
+        }
+        Commands::VideoPlay {
+            video,
+            monitor,
+            downloads_root,
+            keep_services,
+            services,
+            mute_audio,
+            profile,
+            display_fps,
+            seamless_loop,
+            loop_crossfade,
+            loop_crossfade_seconds,
+            optimize,
+            proxy_width,
+            proxy_fps,
+            proxy_crf,
+            dry_run,
+        } => {
+            let effective_services = if services.is_empty() {
+                default_services()
+            } else {
+                services
+            };
+
+            if !keep_services {
+                stop_services(&effective_services, dry_run)?;
+            }
+
+            stop_existing_mpvpaper_for_monitor(&monitor, dry_run)?;
+
+            let explicit_path = std::path::PathBuf::from(&video);
+            let resolved_entry = if explicit_path.is_file() {
+                explicit_path
+            } else {
+                let info = inspect_wallpaper(&video, &downloads_root)?;
+                match info.wallpaper_type {
+                    WallpaperType::Video => std::path::PathBuf::from(
+                        info.entry
+                            .as_deref()
+                            .context("Video wallpaper entry was not found")?,
+                    ),
+                    WallpaperType::Scene => {
+                        let scene_root = std::path::Path::new(&info.root);
+                        find_scene_compatible_video(scene_root, true).with_context(|| {
+                            format!(
+                                "No playable video fallback was found for scene wallpaper {}",
+                                video
+                            )
+                        })?
+                    }
+                    _ => bail!(
+                        "Unsupported input for video-play: '{}'. Expected a video file path, video wallpaper id/path, or scene with playable video fallback.",
+                        video
+                    ),
+                }
+            };
+
+            if !resolved_entry.is_file() {
+                bail!("Resolved video entry does not exist: {}", resolved_entry.display());
+            }
+
+            let final_entry = if optimize {
+                let mut hasher = DefaultHasher::new();
+                resolved_entry.to_string_lossy().hash(&mut hasher);
+                proxy_width.hash(&mut hasher);
+                proxy_fps.hash(&mut hasher);
+                proxy_crf.hash(&mut hasher);
+                loop_crossfade.hash(&mut hasher);
+                format!("{:.3}", loop_crossfade_seconds).hash(&mut hasher);
+                let key = format!("{:x}", hasher.finish());
+                let cache_dir = default_video_live_cache_root().join(key);
+                let optimized = if loop_crossfade {
+                    maybe_build_loop_crossfade_proxy(
+                        &resolved_entry,
+                        &cache_dir,
+                        proxy_width,
+                        proxy_fps,
+                        proxy_crf,
+                        loop_crossfade_seconds,
+                        dry_run,
+                    )?
+                } else {
+                    maybe_build_optimized_proxy(
+                        &resolved_entry,
+                        &cache_dir,
+                        proxy_width,
+                        proxy_fps,
+                        proxy_crf,
+                        dry_run,
+                    )?
+                };
+                if optimized != resolved_entry {
+                    eprintln!(
+                        "[ok] optimized live video proxy ready: {}",
+                        optimized.display()
+                    );
+                }
+                optimized
+            } else {
+                resolved_entry
+            };
+
+            let extra_opt = seamless_loop.then_some(
+                "keep-open=no cache=yes demuxer-max-bytes=134217728 demuxer-max-back-bytes=67108864 hr-seek=no",
+            );
+
+            launch_mpvpaper_with_extra(
+                &monitor,
+                &final_entry.to_string_lossy(),
+                profile,
+                mute_audio,
+                display_fps,
+                extra_opt,
+                dry_run,
+            )?;
+
+            println!("[ok] video livewallpaper: {}", final_entry.display());
+            println!(
+                "[ok] seamless_loop={} loop_crossfade={} fade_seconds={:.3} optimize={} width={} fps={} crf={}",
+                seamless_loop,
+                loop_crossfade,
+                loop_crossfade_seconds,
+                optimize,
+                proxy_width,
+                proxy_fps,
+                proxy_crf
+            );
             Ok(())
         }
         Commands::AudioStream {

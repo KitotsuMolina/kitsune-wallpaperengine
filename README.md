@@ -58,6 +58,21 @@ cargo run -- scene-gpu-play <id|ruta> \
   --proxy-crf 24
 ```
 
+### Reproducir video como livewallpaper (loop fluido + alta calidad)
+
+```bash
+cargo run -- video-play /ruta/al/video.mp4 \
+  --monitor <MONITOR> \
+  --profile quality \
+  --seamless-loop true \
+  --loop-crossfade true \
+  --loop-crossfade-seconds 0.35 \
+  --optimize true \
+  --proxy-width 3840 \
+  --proxy-fps 60 \
+  --proxy-crf 16
+```
+
 ### Plan de audio overlay (scene)
 
 ```bash

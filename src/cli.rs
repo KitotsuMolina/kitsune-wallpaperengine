@@ -196,6 +196,39 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    VideoPlay {
+        video: String,
+        #[arg(long)]
+        monitor: String,
+        #[arg(long, default_value_os_t = default_downloads_root())]
+        downloads_root: PathBuf,
+        #[arg(long)]
+        keep_services: bool,
+        #[arg(long = "service")]
+        services: Vec<String>,
+        #[arg(long)]
+        mute_audio: bool,
+        #[arg(long, value_enum, default_value_t = PlaybackProfile::Quality)]
+        profile: PlaybackProfile,
+        #[arg(long)]
+        display_fps: Option<u32>,
+        #[arg(long, default_value_t = true)]
+        seamless_loop: bool,
+        #[arg(long, default_value_t = false)]
+        loop_crossfade: bool,
+        #[arg(long, default_value_t = 0.35)]
+        loop_crossfade_seconds: f32,
+        #[arg(long, default_value_t = true)]
+        optimize: bool,
+        #[arg(long, default_value_t = 3840)]
+        proxy_width: u32,
+        #[arg(long, default_value_t = 60)]
+        proxy_fps: u32,
+        #[arg(long, default_value_t = 16)]
+        proxy_crf: u8,
+        #[arg(long)]
+        dry_run: bool,
+    },
     AudioProbe {
         #[arg(long)]
         source: Option<String>,
